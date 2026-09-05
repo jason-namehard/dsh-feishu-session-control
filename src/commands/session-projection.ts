@@ -12,6 +12,8 @@ import { memberOwnerForScope } from '../bridge/scope-isolation.js';
 import type { CommandChannel, CommandContext } from './index.js';
 import type { PreparedSessionBinding, SessionProjectionBridge } from '../session/projection-bridge.js';
 import type { SessionProjectionStore } from '../session/projection-store.js';
+import type { SessionAliasManager } from '../session/alias-manager.js';
+import { renderSessionDeleteConfirmCard } from '../card/session-alias-card.js';
 
 interface PendingBinding {
   nonce: string;
@@ -22,6 +24,20 @@ interface PendingBinding {
   threadId?: string;
   prepared: PreparedSessionBinding;
   expectedOwner?: { scope: string; workspaceCwd: string };
+  expiresAt: number;
+  timer: NodeJS.Timeout;
+}
+
+interface PendingDeletion {
+  nonce: string;
+  alias: string;
+  sessionId: string;
+  session: import('../session/projection-protocol.js').DshSessionSummary;
+  actorId: string;
+  scope: string;
+  workspaceCwd: string;
+  chatId: string;
+  threadId?: string;
   expiresAt: number;
   timer: NodeJS.Timeout;
 }
@@ -37,6 +53,7 @@ export interface SessionProjectionActionInput {
 /** Explicit selector/confirmation workflow; no external activity can call bind. */
 export class SessionProjectionController {
   private readonly pending = new Map<string, PendingBinding>();
+  private readonly pendingDeletions = new Map<string, PendingDeletion>();
 
   constructor(private readonly deps: {
     bridge: SessionProjectionBridge;
@@ -45,6 +62,7 @@ export class SessionProjectionController {
     scopes: ScopeDirectory;
     access: AccessManager;
     channel: CommandChannel;
+    aliases?: SessionAliasManager;
     confirmationTtlMs?: number;
     selectorLimit?: number;
   }) {}
@@ -92,7 +110,93 @@ export class SessionProjectionController {
     }), this.options(ctx.threadId));
   }
 
+  async handleAliasCommand(command: 'sessions' | 'use' | 'delete', args: string, ctx: CommandContext): Promise<void> {
+    if (!this.deps.aliases) throw new Error('session aliases are not configured');
+    const actorId = this.requireAuthorized(ctx.scope, ctx.chatId, ctx.chatMode, ctx.senderId);
+    const alias = args.trim().split(/\s+/u).filter(Boolean)[0];
+    if (command !== 'sessions' && !alias) {
+      throw new Error(`Usage: /${command} <MMDD-N>`);
+    }
+    if (command === 'sessions') {
+      if (args.trim()) throw new Error('Usage: /sessions');
+      const sessions = await this.deps.bridge.listSessions();
+      await this.deps.aliases.syncSessions(sessions.map((session) => ({
+        sessionId: session.sessionId,
+        updatedAt: session.updatedAt,
+      })));
+      const byId = new Map(sessions.map((session) => [session.sessionId, session]));
+      const entries = this.deps.aliases.entries().filter((entry) => byId.has(entry.sessionId));
+      const zh = ['**DSH 会话列表**', ''];
+      const en = ['**DSH sessions**', ''];
+      if (entries.length === 0) {
+        zh.push('暂无可用会话。');
+        en.push('No sessions are available.');
+      } else {
+        let currentDate = '';
+        for (const entry of entries) {
+          const datePrefix = entry.alias.slice(0, 4);
+          if (datePrefix !== currentDate) {
+            currentDate = datePrefix;
+            zh.push(`**${datePrefix}**`);
+            en.push(`**${datePrefix}**`);
+          }
+          const session = byId.get(entry.sessionId)!;
+          const title = session.title?.trim() || '未命名会话';
+          const statusZh = session.running ? '运行中' : '空闲';
+          const statusEn = session.running ? 'running' : 'idle';
+          zh.push(`- \`${entry.alias}\` · **${title}** · ${statusZh} · \`${entry.sessionId}\``);
+          en.push(`- \`${entry.alias}\` · **${title}** · ${statusEn} · \`${entry.sessionId}\``);
+        }
+      }
+      await ctx.channel.sendMarkdown(
+        ctx.chatId,
+        bilingualMarkdown(zh.join('\n'), en.join('\n'), ctx.languagePolicies?.get().plain),
+        this.options(ctx.threadId),
+      );
+      return;
+    }
+    const sessionId = this.deps.aliases.getSessionId(alias!);
+    if (!sessionId) throw new Error(`alias not found: ${alias}`);
+    const session = (await this.deps.bridge.listSessions()).find((item) => item.sessionId === sessionId);
+    if (!session) {
+      await this.deps.aliases.removeAlias(alias!);
+      throw new Error(`session for alias ${alias} was already deleted`);
+    }
+    const workspaceCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
+    if (command === 'use') {
+      if (session.cwd && session.cwd !== workspaceCwd) {
+        throw new Error(`alias ${alias} belongs to workspace ${session.cwd}; switch workspace first`);
+      }
+      await this.prepareConfirmation({
+        sessionId,
+        identity: { scope: ctx.scope, workspaceCwd, actorId },
+        chatId: ctx.chatId,
+        ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+      });
+      return;
+    }
+    await this.prepareDeletion({
+      alias: alias!,
+      session,
+      actorId,
+      scope: ctx.scope,
+      workspaceCwd,
+      chatId: ctx.chatId,
+      ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+    });
+  }
+
+  async createNewSession(ctx: CommandContext, workspaceCwd: string): Promise<string> {
+    if (!this.deps.aliases) throw new Error('session aliases are not configured');
+    const sessionId = await this.deps.bridge.createSession(workspaceCwd);
+    const alias = await this.deps.aliases.registerSession(sessionId);
+    this.deps.sessions.clearSessionElsewhere(sessionId, ctx.scope, workspaceCwd);
+    this.deps.sessions.set(ctx.scope, sessionId, workspaceCwd);
+    return alias;
+  }
+
   async handleAction(input: SessionProjectionActionInput): Promise<{ toast: { type: 'success' | 'info' | 'error'; content: string } }> {
+    if (input.value.cmd === 'session-alias') return this.handleAliasAction(input);
     this.pruneExpired();
     const action = typeof input.value.action === 'string' ? input.value.action : '';
     const requestedScope = typeof input.value.scope === 'string' ? input.value.scope : '';
@@ -175,6 +279,57 @@ export class SessionProjectionController {
   close(): void {
     for (const pending of this.pending.values()) clearTimeout(pending.timer);
     this.pending.clear();
+    for (const pending of this.pendingDeletions.values()) clearTimeout(pending.timer);
+    this.pendingDeletions.clear();
+  }
+
+  private async handleAliasAction(input: SessionProjectionActionInput): Promise<{ toast: { type: 'success' | 'info' | 'error'; content: string } }> {
+    this.pruneExpired();
+    if (!this.deps.aliases) return { toast: { type: 'error', content: 'session aliases are not configured' } };
+    const action = typeof input.value.action === 'string' ? input.value.action : '';
+    const alias = typeof input.value.alias === 'string' ? input.value.alias : '';
+    const requestedScope = typeof input.value.scope === 'string' ? input.value.scope : '';
+    const workspaceCwd = typeof input.value.workspaceCwd === 'string' ? input.value.workspaceCwd : '';
+    const cardActor = typeof input.value.actorId === 'string' ? input.value.actorId : '';
+    if (!input.operatorId || input.operatorId !== cardActor || requestedScope !== input.currentScope) {
+      return { toast: { type: 'error', content: 'operator or scope mismatch' } };
+    }
+    const entry = this.deps.scopes.entry(requestedScope);
+    const mode = entry?.chatMode ?? (input.threadId ? 'topic' : 'group');
+    try {
+      this.requireAuthorized(requestedScope, input.chatId, mode, input.operatorId);
+      const nonce = typeof input.value.nonce === 'string' ? input.value.nonce : '';
+      const pending = this.pendingDeletions.get(nonce);
+      if (!pending || pending.expiresAt <= Date.now() || pending.alias !== alias ||
+          pending.actorId !== input.operatorId || pending.scope !== requestedScope ||
+          pending.workspaceCwd !== workspaceCwd || pending.chatId !== input.chatId ||
+          pending.threadId !== input.threadId) {
+        if (pending) clearTimeout(pending.timer);
+        this.pendingDeletions.delete(nonce);
+        throw new Error('confirmation expired or no longer matches its original target');
+      }
+      clearTimeout(pending.timer);
+      this.pendingDeletions.delete(nonce);
+      if (action === 'delete-cancel') {
+        return { toast: { type: 'info', content: 'Cancelled; session was not deleted' } };
+      }
+      if (action !== 'delete-confirm') throw new Error('unknown session deletion action');
+      if (this.deps.aliases.getSessionId(pending.alias) !== pending.sessionId) {
+        throw new Error('alias mapping changed; send /delete again');
+      }
+      const current = (await this.deps.bridge.listSessions()).find((item) => item.sessionId === pending.sessionId);
+      if (!current) {
+        await this.deps.aliases.removeAlias(pending.alias);
+        throw new Error(`session for alias ${pending.alias} was already deleted`);
+      }
+      await this.deps.bridge.deleteSession(pending.sessionId);
+      this.deps.sessions.clearSessionId(pending.sessionId);
+      await this.deps.store.removeSession(pending.sessionId);
+      await this.deps.aliases.removeAlias(pending.alias);
+      return { toast: { type: 'success', content: `Deleted session ${pending.alias}` } };
+    } catch (error) {
+      return { toast: { type: 'error', content: error instanceof Error ? error.message : String(error) } };
+    }
   }
 
   private async prepareConfirmation(input: {
@@ -223,6 +378,50 @@ export class SessionProjectionController {
     }), this.options(input.threadId));
   }
 
+  private async prepareDeletion(input: {
+    alias: string;
+    session: import('../session/projection-protocol.js').DshSessionSummary;
+    actorId: string;
+    scope: string;
+    workspaceCwd: string;
+    chatId: string;
+    threadId?: string;
+  }): Promise<void> {
+    if (!this.deps.aliases) throw new Error('session aliases are not configured');
+    const owner = this.deps.store.ownerOf(input.session.sessionId);
+    const localOwner = this.deps.sessions.scopeForSession(input.session.sessionId);
+    if ((owner && owner.scope !== input.scope || localOwner && localOwner !== input.scope) &&
+        !this.deps.access.isAdmin(input.actorId)) {
+      throw new Error('this session belongs to another Feishu scope; only a profile administrator may delete it');
+    }
+    const nonce = randomUUID();
+    const expiresAt = Date.now() + (this.deps.confirmationTtlMs ?? 10 * 60_000);
+    const timer = setTimeout(() => this.pendingDeletions.delete(nonce), expiresAt - Date.now());
+    timer.unref?.();
+    this.pendingDeletions.set(nonce, {
+      nonce,
+      alias: input.alias,
+      sessionId: input.session.sessionId,
+      session: input.session,
+      actorId: input.actorId,
+      scope: input.scope,
+      workspaceCwd: input.workspaceCwd,
+      chatId: input.chatId,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      expiresAt,
+      timer,
+    });
+    if (!this.deps.channel.sendCard) throw new Error('current channel does not support confirmation cards');
+    await this.deps.channel.sendCard(input.chatId, renderSessionDeleteConfirmCard({
+      alias: input.alias,
+      session: input.session,
+      nonce,
+      scope: input.scope,
+      workspaceCwd: input.workspaceCwd,
+      actorId: input.actorId,
+    }), this.options(input.threadId));
+  }
+
   private requireAuthorized(
     scope: string,
     chatId: string,
@@ -254,6 +453,12 @@ export class SessionProjectionController {
       if (pending.expiresAt <= now) {
         clearTimeout(pending.timer);
         this.pending.delete(nonce);
+      }
+    }
+    for (const [nonce, pending] of this.pendingDeletions) {
+      if (pending.expiresAt <= now) {
+        clearTimeout(pending.timer);
+        this.pendingDeletions.delete(nonce);
       }
     }
   }

@@ -308,6 +308,23 @@ export class SessionStore {
     }
   }
 
+  /** Clear every local binding for a native session after permanent deletion. */
+  clearSessionId(sessionId: string): number {
+    let changed = 0;
+    for (const workspaces of Object.values(this.data.workspaces)) {
+      for (const state of Object.values(workspaces)) {
+        if (state.record.sessionId !== sessionId) continue;
+        state.record = { ...state.record, sessionId: undefined };
+        changed += 1;
+      }
+    }
+    if (changed > 0) {
+      this.rebuildSessionIndex();
+      this.schedulePersist();
+    }
+    return changed;
+  }
+
   async flush(): Promise<void> {
     await this.pendingArchive;
     await this.saving;

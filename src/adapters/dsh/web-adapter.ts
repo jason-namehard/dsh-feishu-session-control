@@ -8,6 +8,7 @@ import type {
 } from '../types.js';
 import { EventChannel } from './event-channel.js';
 import { translateSessionEvent } from './sdk-translate.js';
+import type { SessionDeleteResult } from '../../session/projection-protocol.js';
 
 export interface WebAdapterOptions {
   /** Base URL of the local dsh web agent (default http://127.0.0.1:3080). */
@@ -281,6 +282,38 @@ export class WebDshAdapter implements AgentAdapter {
     });
     if (!response.ok) throw new Error(`web RPC ${method} failed: HTTP ${response.status}`);
     return response.json() as Promise<T>;
+  }
+
+  async createSession(cwd: string): Promise<string> {
+    const response = await this.rpc<{
+      result?: { ok?: boolean; value?: { sessionId?: string }; error?: { message?: string } };
+    }>('session.create', { cwd });
+    if (!response.result?.ok || !response.result.value?.sessionId) {
+      throw new Error(response.result?.error?.message ?? 'web session.create failed');
+    }
+    return response.result.value.sessionId;
+  }
+
+  async deleteSession(sessionId: string): Promise<SessionDeleteResult> {
+    const response = await fetch(`${this.baseUrl}/__chameleon/session/delete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      body = undefined;
+    }
+    if (!response.ok || !body || typeof body !== 'object' || (body as { ok?: boolean }).ok !== true) {
+      const message = body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string'
+        ? (body as { error: string }).error
+        : `session deletion failed: HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return body as SessionDeleteResult;
   }
 
   async openMux(): Promise<WebSocket> {

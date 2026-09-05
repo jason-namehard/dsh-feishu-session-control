@@ -36,6 +36,7 @@ import type { PermissionPolicyStore } from '../bot/permission-policy-store.js';
 import type { ExecutionMode } from '../bot/execution-mode-store.js';
 import { permissionPolicyDenial, policyDenialText } from '../policy/tool-policy.js';
 import { renderChannelContext, type ChannelContext } from './channel-context.js';
+import type { SessionAliasManager } from '../session/alias-manager.js';
 
 /**
  * Pause threshold (ms) after which a non-empty interim text buffer is flushed
@@ -114,6 +115,7 @@ export interface RunFlowInput {
     detail?: string;
     nativeSessionId?: string;
   }) => void | Promise<void>;
+  sessionAliases?: SessionAliasManager;
 }
 
 export type RunBatchOutcome = 'completed' | 'failed' | 'interrupted';
@@ -515,6 +517,7 @@ async function runAttempt(
               activeSessionId = event.sessionId;
               activeModel = modelRoute(input.provider, event.model ?? input.model);
               input.sessions.set(input.scope, event.sessionId, workspaceCwd);
+              await input.sessionAliases?.registerSession(event.sessionId);
             }
             if (event.type === 'thinking') await checkpoint('thinking');
             if (event.type === 'tool_use') await checkpoint('tool', event.name);

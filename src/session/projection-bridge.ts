@@ -12,6 +12,7 @@ import {
   textContent,
   type DshSessionEvent,
   type DshSessionSummary,
+  type SessionDeleteResult,
   type SessionProjectionSource,
 } from './projection-protocol.js';
 import type {
@@ -106,9 +107,25 @@ export class SessionProjectionBridge {
   }
 
   async eligibleSessions(workspaceCwd: string): Promise<DshSessionSummary[]> {
-    return (await this.deps.source.listSessions())
+    return (await this.listSessions())
       .filter((session) => session.cwd === workspaceCwd && session.origin !== 'subagent')
       .sort((left, right) => right.updatedAt - left.updatedAt);
+  }
+
+  async listSessions(): Promise<DshSessionSummary[]> {
+    return (await this.deps.source.listSessions())
+      .filter((session) => session.origin !== 'subagent')
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+  }
+
+  async createSession(workspaceCwd: string): Promise<string> {
+    if (!this.deps.source.createSession) throw new Error('session creation is unavailable for this adapter');
+    return this.deps.source.createSession(workspaceCwd);
+  }
+
+  async deleteSession(sessionId: string): Promise<SessionDeleteResult> {
+    if (!this.deps.source.deleteSession) throw new Error('session deletion is unavailable for this adapter');
+    return this.deps.source.deleteSession(sessionId);
   }
 
   async prepare(

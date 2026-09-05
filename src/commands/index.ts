@@ -73,6 +73,7 @@ import type { LanguagePolicyStore } from '../bot/language-policy-store.js';
 import type { SecretTargetType } from '../secret/registry.js';
 import { assertCommandCatalogMatches, renderCommandHelp } from './catalog.js';
 import type { ChannelUpdateController } from '../upgrade/channel-update.js';
+import type { SessionAliasManager } from '../session/alias-manager.js';
 
 export interface CommandChannel {
   sendMarkdown(
@@ -153,6 +154,7 @@ export interface CommandContext {
   createDiagnosticBundle?: (request: DiagnosticRequestSnapshot) => Promise<DiagnosticFile>;
   diagnosticTimeoutMs?: { generate: number; upload: number };
   sessionProjection?: SessionProjectionController;
+  sessionAliases?: SessionAliasManager;
   languagePolicies?: Pick<LanguagePolicyStore, 'get' | 'set' | 'reset'>;
   secretService?: {
     request(input: { scope: string; chatId: string; threadId?: string; ownerId: string; target: SecretTargetType; reference: string; purpose: string }): Promise<void>;
@@ -288,10 +290,23 @@ async function handleNew(_args: string, ctx: CommandContext): Promise<void> {
   const cwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
   const interrupted = await ctx.activeRuns.interruptWorkspace(ctx.scope, cwd);
   ctx.sessions.clear(ctx.scope, cwd);
+  let zhMessage = interrupted > 0 ? `已中断 ${String(interrupted)} 个任务并开始新会话。` : '已开始新会话。';
+  let enMessage = interrupted > 0 ? `Interrupted ${String(interrupted)} task(s) and started a new session.` : 'Started a new session.';
+  if (ctx.sessionProjection && ctx.sessionAliases) {
+    try {
+      const alias = await ctx.sessionProjection.createNewSession(ctx, cwd);
+      zhMessage += ` 别名：\`${alias}\`。`;
+      enMessage += ` Alias: \`${alias}\`.`;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      zhMessage += ` 但别名创建失败：${detail}`;
+      enMessage += ` Alias creation failed: ${detail}.`;
+    }
+  }
   await reply(
     ctx,
-    interrupted > 0 ? `已中断 ${String(interrupted)} 个任务并开始新会话。` : '已开始新会话。',
-    interrupted > 0 ? `Interrupted ${String(interrupted)} task(s) and started a new session.` : 'Started a new session.',
+    zhMessage,
+    enMessage,
   );
   try {
     // A new session is an explicit user boundary, so probe once even when the
@@ -1342,6 +1357,22 @@ async function handleSessionProjection(args: string, ctx: CommandContext): Promi
   await ctx.sessionProjection.handleCommand(args, ctx);
 }
 
+async function handleSessionAliases(
+  command: 'sessions' | 'use' | 'delete',
+  args: string,
+  ctx: CommandContext,
+): Promise<void> {
+  if (!ctx.sessionProjection || !ctx.sessionAliases) {
+    await reply(
+      ctx,
+      '当前 adapter 未提供会话别名管理；请使用 `web` adapter 并确认 Web host 可用。',
+      'The current adapter does not provide session aliases; use the `web` adapter and ensure the Web host is reachable.',
+    );
+    return;
+  }
+  await ctx.sessionProjection.handleAliasCommand(command, args, ctx);
+}
+
 const handlers: Record<string, Handler> = {
   '/new': handleNew,
   '/reset': handleNew,
@@ -1355,6 +1386,9 @@ const handlers: Record<string, Handler> = {
   '/doctor': handleDoctor,
   '/resume': handleResume,
   '/session': handleSessionProjection,
+  '/sessions': (args, ctx) => handleSessionAliases('sessions', args, ctx),
+  '/use': (args, ctx) => handleSessionAliases('use', args, ctx),
+  '/delete': (args, ctx) => handleSessionAliases('delete', args, ctx),
   '/stop': handleStop,
   '/timeout': handleTimeout,
   '/concurrency': handleConcurrency,

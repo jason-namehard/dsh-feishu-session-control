@@ -52,6 +52,7 @@ import type { NotificationChannelStore, OutboundSinkRegistry } from '../notify/s
 import type { ReplyPolicyStore } from '../bot/reply-policy-store.js';
 import type { SessionProjectionStore } from '../session/projection-store.js';
 import type { SessionProjectionSource } from '../session/projection-protocol.js';
+import type { SessionAliasManager } from '../session/alias-manager.js';
 import {
   SessionProjectionBridge,
   type SessionProjectionLimits,
@@ -159,6 +160,7 @@ export interface StartChannelDeps {
   sessionProjectionStore?: SessionProjectionStore;
   sessionProjectionSource?: SessionProjectionSource;
   sessionProjectionLimits?: SessionProjectionLimits;
+  sessionAliases?: SessionAliasManager;
 }
 
 export interface BridgeChannel {
@@ -246,6 +248,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         scopes: deps.scopeDirectory,
         access: deps.accessManager,
         channel: commandChannel,
+        ...(deps.sessionAliases ? { aliases: deps.sessionAliases } : {}),
       })
     : undefined;
   sessionProjection?.rehydrateSessionMappings();
@@ -485,6 +488,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           } }
         : {}),
       ...(sessionProjection ? { sessionProjection } : {}),
+      ...(deps.sessionAliases ? { sessionAliases: deps.sessionAliases } : {}),
       ...(deps.channelUpdates ? { channelUpdates: deps.channelUpdates } : {}),
     };
 

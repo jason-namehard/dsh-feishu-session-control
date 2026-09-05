@@ -58,6 +58,14 @@ DeepSeek Harness (dsh) ──▶ DeepSeek V4 Pro / Flash
 实时事件 → transcript 卡与 bot-owned 实时卡。DSH append-only session log 始终是唯一真源；
 TUI/WebUI 的 active session 不参与 binding 决策。
 
+会话别名由 `SessionAliasManager` 单独持久化到默认工作区的
+`.session_aliases.json`，只保存 `MMDD-N → native sessionId` 映射。`/sessions` 会以
+`session.list` 同步并清除已在 WebUI 删除的陈旧映射；`/new` 创建 Web session 后注册别名；
+`/use` 复用既有显式绑定确认流程。`/delete` 先发 owner-bound、一次性、十分钟过期的飞书确认卡，
+确认后通过本机 Web host 上由 `workbench_session_delete` 插件提供的
+`/__chameleon/session/delete` 删除核心，再清理 bridge 的兼容 binding、projection binding 与别名。
+删除不会重排其他别名，也不需要公网 HTTP 入口。
+
 ```
 ┌──────────────────────────────────────────┐
 │  guardian/（可选 · 独立于 dsh 的进程）      │

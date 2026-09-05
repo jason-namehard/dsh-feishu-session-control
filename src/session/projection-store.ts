@@ -104,6 +104,18 @@ export class SessionProjectionStore {
     return Object.values(this.data.bindings).map((item) => cloneBinding(item)!);
   }
 
+  async removeSession(sessionId: string): Promise<number> {
+    return this.commit(async () => {
+      let removed = 0;
+      for (const [key, binding] of Object.entries(this.data.bindings)) {
+        if (binding.sessionId !== sessionId) continue;
+        delete this.data.bindings[key];
+        removed += 1;
+      }
+      return removed;
+    }, { step: 'remove-session', sessionId });
+  }
+
   async bindExclusive(input: {
     scope: string;
     workspaceCwd: string;

@@ -54,6 +54,7 @@ import { prepareAttachments } from '../../media/attachments.js';
 import { SessionStore } from '../../session/store.js';
 import { SessionProjectionStore } from '../../session/projection-store.js';
 import { WebSessionProjectionSource } from '../../session/projection-protocol.js';
+import { SessionAliasManager } from '../../session/alias-manager.js';
 import { archiveScopeSlug, SessionArchive } from '../../session/archive.js';
 import { GitWorktreeManager } from '../../workspace/git-worktree.js';
 import { WorkspaceStore } from '../../workspace/store.js';
@@ -231,6 +232,7 @@ export async function startBridgeEngine(
 
   const sessions = new SessionStore(paths.sessionsFile(profileName));
   const sessionProjections = new SessionProjectionStore(paths.sessionProjectionsFile(profileName));
+  const sessionAliases = new SessionAliasManager(join(defaultWorkspace, '.session_aliases.json'));
   const jobs = new JobLedger(paths.jobsFile(profileName));
   const archiver = new SessionArchive(paths.archivesDir(profileName));
   const workspaces = new WorkspaceStore(paths.workspacesFile(profileName));
@@ -256,6 +258,7 @@ export async function startBridgeEngine(
   await Promise.all([
     sessions.load(),
     sessionProjections.load(),
+    sessionAliases.load(),
     jobs.load(),
     workspaces.load(),
     roleStore.load(),
@@ -575,6 +578,7 @@ export async function startBridgeEngine(
           channel: streaming,
           runCardAnchors,
           defaultWorkspace,
+          sessionAliases,
           replyTo: first.messageId,
           deliverFinalReply: (replyScope, chatId, markdown, options) => replyDispatcher.deliver(replyScope, chatId, markdown, options),
           ...(scopeOwner ? { scopeOwner } : {}),
@@ -725,6 +729,7 @@ export async function startBridgeEngine(
           },
         }
       : {}),
+    sessionAliases,
     createDiagnosticBundle: async (request) => {
       const service = new ServiceManager({
         profile: dshProfileName,

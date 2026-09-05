@@ -76,3 +76,30 @@ describe('WebDshAdapter resume capability', () => {
     expect(adapter.canResume({ cwd: '/repo', sessionId: 's1', model: 'm' })).toBe(false);
   });
 });
+
+describe('WebDshAdapter session lifecycle', () => {
+  it('creates through session.create and deletes through the local plugin route', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ result: { ok: true, value: { sessionId: 's1' } } }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true, stopped: false, detached: true, dirRemoved: true, projRemoved: true, workspaceRemoved: true,
+      }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new WebDshAdapter({ provider: 'p', model: 'm' });
+
+    await expect(adapter.createSession('/repo')).resolves.toBe('s1');
+    await expect(adapter.deleteSession('s1')).resolves.toEqual({
+      ok: true, stopped: false, detached: true, dirRemoved: true, projRemoved: true, workspaceRemoved: true,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://127.0.0.1:3080/api/session.create', expect.objectContaining({
+      method: 'POST',
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://127.0.0.1:3080/__chameleon/session/delete', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 's1' }),
+    }));
+    await adapter.dispose();
+  });
+});

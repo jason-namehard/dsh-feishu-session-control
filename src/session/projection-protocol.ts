@@ -26,16 +26,28 @@ export interface DshHistoryPage {
   hasMore: boolean;
 }
 
+export interface SessionDeleteResult {
+  stopped: boolean;
+  detached: boolean;
+  dirRemoved: boolean;
+  projRemoved: boolean;
+  workspaceRemoved: boolean;
+}
+
 export interface SessionProjectionSource {
   listSessions(): Promise<DshSessionSummary[]>;
   history(sessionId: string, options?: { beforeSeq?: number; maxMessages?: number }): Promise<DshHistoryPage>;
   prompt(sessionId: string, text: string, rpcId?: string): Promise<{ rpcId: string }>;
   openMux(): Promise<WebSocket>;
+  createSession?(cwd: string): Promise<string>;
+  deleteSession?(sessionId: string): Promise<SessionDeleteResult>;
 }
 
 export interface WebProjectionTransport {
   rpc<T = unknown>(method: string, payload: unknown, rpcId?: string): Promise<T>;
   openMux(): Promise<WebSocket>;
+  createSession?(cwd: string): Promise<string>;
+  deleteSession?(sessionId: string): Promise<SessionDeleteResult>;
 }
 
 /** Typed, validation-owning facade over the rc.8 Web host session RPCs. */
@@ -95,6 +107,20 @@ export class WebSessionProjectionSource implements SessionProjectionSource {
 
   openMux(): Promise<WebSocket> {
     return this.transport.openMux();
+  }
+
+  async createSession(cwd: string): Promise<string> {
+    if (this.transport.createSession) return this.transport.createSession(cwd);
+    const value = responseValue(await this.transport.rpc('session.create', { cwd }));
+    if (!isRecord(value) || typeof value.sessionId !== 'string' || !value.sessionId) {
+      throw new Error('invalid session.create response');
+    }
+    return value.sessionId;
+  }
+
+  async deleteSession(sessionId: string): Promise<SessionDeleteResult> {
+    if (!this.transport.deleteSession) throw new Error('session deletion is unavailable for this adapter');
+    return this.transport.deleteSession(sessionId);
   }
 }
 

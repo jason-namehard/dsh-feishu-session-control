@@ -9,6 +9,7 @@ import { ScopeDirectory } from '../../src/bridge/scope-directory.js';
 import type { SessionProjectionBridge } from '../../src/session/projection-bridge.js';
 import { SessionProjectionStore } from '../../src/session/projection-store.js';
 import { SessionStore } from '../../src/session/store.js';
+import { SessionAliasManager } from '../../src/session/alias-manager.js';
 
 async function fixture(
   admins: string[] = [],
@@ -19,11 +20,16 @@ async function fixture(
   const store = new SessionProjectionStore(join(root, 'projection.json'));
   const sessions = new SessionStore(join(root, 'sessions.json'));
   const scopes = new ScopeDirectory(join(root, 'scopes.json'));
-  await Promise.all([store.load(), sessions.load(), scopes.load()]);
-  const session = { sessionId: 's1', updatedAt: 100, running: false, blank: false, cwd: '/repo', title: 'Release' };
+  const aliases = new SessionAliasManager(join(root, 'aliases.json'), () => new Date(2026, 8, 5));
+  await Promise.all([store.load(), sessions.load(), scopes.load(), aliases.load()]);
+  const session = { sessionId: 's1', updatedAt: new Date(2026, 8, 5).getTime(), running: false, blank: false, cwd: '/repo', title: 'Release' };
+  let deleted = false;
   const prepared = { session, messages: [{ role: 'user' as const, content: 'secret history', source: 'other-dsh-client' as const }], backfillCount: 1, truncated: false, snapshotSeq: 5 };
   const bridge = {
     eligibleSessions: vi.fn(async () => [session]),
+    listSessions: vi.fn(async () => deleted ? [] : [session]),
+    createSession: vi.fn(async () => 's2'),
+    deleteSession: vi.fn(async () => { deleted = true; return { stopped: false, detached: false, dirRemoved: true, projRemoved: true, workspaceRemoved: true }; }),
     prepare: vi.fn(async () => prepared),
     bindConfirmed: vi.fn(async (input: Parameters<SessionProjectionBridge['bindConfirmed']>[0]) => {
       const result = await store.bindExclusive({
@@ -49,8 +55,9 @@ async function fixture(
   const controller = new SessionProjectionController({
     bridge, store, sessions, scopes, access,
     channel: { sendCard, sendMarkdown },
+    aliases,
   });
-  return { controller, bridge, store, sessions, scopes, sendCard, sendMarkdown, prepared };
+  return { controller, bridge, store, sessions, scopes, aliases, sendCard, sendMarkdown, prepared };
 }
 
 function commandContext(input: {
@@ -85,6 +92,46 @@ describe('/session explicit binding workflow', () => {
     expect(selector).toContain('s1');
     expect(selector).not.toContain('secret history');
     expect(f.bridge.bindConfirmed).not.toHaveBeenCalled();
+  });
+
+  it('lists stable aliases and creates a native session for /new-style callers', async () => {
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    await f.controller.handleAliasCommand('sessions', '', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+    expect(f.sendMarkdown).toHaveBeenCalledWith('chat-a', expect.stringContaining('0905-1'), undefined);
+
+    const alias = await f.controller.createNewSession(commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }), '/repo');
+    expect(alias).toBe('0905-2');
+    expect(f.sessions.resumeFor('chat-a', '/repo')).toBe('s2');
+  });
+
+  it('requires confirmation and cleans the alias after permanent deletion', async () => {
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    f.sessions.set('chat-a', 's1', '/repo');
+    await f.controller.handleAliasCommand('delete', '0905-1', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+    const card = JSON.stringify(f.sendCard.mock.calls.at(-1)?.[1]);
+    const nonce = [...card.matchAll(/"nonce":"([^"]+)"/gu)][0]?.[1];
+    expect(card).toContain('0905-1');
+    expect(f.bridge.deleteSession).not.toHaveBeenCalled();
+
+    const result = await f.controller.handleAction({
+      value: { cmd: 'session-alias', action: 'delete-confirm', alias: '0905-1', nonce, scope: 'chat-a', workspaceCwd: '/repo', actorId: 'user-a' },
+      operatorId: 'user-a', chatId: 'chat-a', threadId: undefined, currentScope: 'chat-a',
+    });
+    expect(result.toast.type).toBe('success');
+    expect(f.bridge.deleteSession).toHaveBeenCalledWith('s1');
+    expect(f.aliases.getSessionId('0905-1')).toBeUndefined();
+    expect(f.sessions.resumeFor('chat-a', '/repo')).toBeUndefined();
+    expect(f.store.list()).toHaveLength(0);
   });
 
   it('requires profile admin for group/topic but permits the owner of a member scope', async () => {

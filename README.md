@@ -49,7 +49,7 @@ dsh --profile dsh-lark                              # ② 启动
 
 - **安全网守护**：dsh 崩溃后飞书仍会回复你，`/safemode` 进入仅核心安全模式直接自愈；重启后自动恢复排队任务，`/jobs` 可显式重试。多数桥接方案是「串行单聊 + 崩溃就失联」。
 - **多机器人可信交接**：`bot add` 增加独立实例，可信机器人在同群真实 @ 交接，连续协作有上限。
-- **完善的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/session` 浏览 / 绑定会话，`/archive` + `/retention` 自动归档与清理，会话列表不会烂掉。
+- **完善的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/session` 浏览 / 绑定会话，`/sessions`、`/use`、`/delete` 通过稳定别名管理 DSH 会话，`/archive` + `/retention` 自动归档与清理，会话列表不会烂掉。
 - **完善的版本管理机制**：管理员直接在飞书发 `/upgrade` 后台更新、验证并重载；有新版本才提醒，不打断当前工作。
 - **dsh Web 可视化设置**：官方 Settings → Plugins 页面点选工作目录、模型、并行数、提醒，不用背环境变量。
 
@@ -73,6 +73,9 @@ dsh --profile dsh-lark                              # ② 启动
 | --- | --- |
 | `/config` | 模型 / Provider / 凭据管理卡片（`/model`、`/provider(s)`、`/key` 为同一张卡的别名） |
 | `/new` `/reset` | 开始新会话 |
+| `/sessions` | 列出 DSH 会话及稳定别名（`MMDD-N`） |
+| `/use <alias>` | 通过别名切换 DSH 会话（需确认） |
+| `/delete <alias>` | 通过别名删除 DSH 会话（需二次确认） |
 | `/status` | 查看状态卡（工作区 / 模型 / session / run / token / 任务账本） |
 | `/mode`（`/effort`） | 选择快速 / 平衡 / 深度任务强度 |
 | `/cd <path>` | 切到该目录的独立会话 |
