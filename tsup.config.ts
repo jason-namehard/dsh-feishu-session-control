@@ -15,6 +15,7 @@ export default defineConfig([
       secret: 'src/notify/secret-tool.ts',
       'sdk-server': 'src/adapters/dsh/sdk-server.ts',
       skill: 'src/skill/index.ts',
+      'session-manager': 'src/integrated/session-manager/index.ts',
     },
     format: ['esm'],
     target: 'node22',

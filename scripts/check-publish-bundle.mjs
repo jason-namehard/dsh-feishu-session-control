@@ -7,9 +7,10 @@
 
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { validateDistCompleteness } from './publish-bundle.mjs';
 
-const ROOT = resolve(new URL('..', import.meta.url).pathname);
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
 const resolved = validateDistCompleteness(join(ROOT, 'dist'), pkg, { label: 'dist' });

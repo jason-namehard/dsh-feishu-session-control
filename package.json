@@ -52,6 +52,10 @@
     "./skill": {
       "types": "./dist/skill.d.ts",
       "import": "./dist/skill.js"
+    },
+    "./session-manager": {
+      "types": "./dist/session-manager.d.ts",
+      "import": "./dist/session-manager.js"
     }
   },
   "files": [
@@ -62,13 +66,16 @@
     "README.md",
     "README_EN.md",
     "SECURITY.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_LICENSES"
   ],
   "dsh": {
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-ui-settings-plugins"
+        "@deepseek-ai/dsh-client-ui-settings-plugins",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
       ]
     },
     "bundle": {

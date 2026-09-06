@@ -1,4 +1,4 @@
-<h1 align="center">dsh-lark-bot</h1>
+<h1 align="center">DSH Feishu Session Manager</h1>
 
 <p align="center">🌏 <a href="README.md">中文</a> · 🌐 Official wiki <a href="https://dsh-lark-bot.arr2018.dpdns.org">dsh-lark-bot.arr2018.dpdns.org</a></p>
 
@@ -18,7 +18,9 @@
   <a href="https://github.com/PlutoKeating/dsh-lark-bot/releases"><img src="https://img.shields.io/github/v/release/PlutoKeating/dsh-lark-bot?sort=semver&label=latest%20release" alt="Latest release"></a>
 </p>
 
-## Overview
+## Project Overview
+
+The project name is **DSH Feishu Session Manager**. The npm/DSH compatibility package name remains `dsh-lark-bot` so existing profiles keep working.
 
 Make DeepSeek Harness a member of your Feishu/Lark and drive your local coding agent directly from phone, group, or thread. It uses a Feishu WebSocket long connection, so you need **no public IP, domain, server, or NAT-tunnelling**; Linux / macOS / Windows, Node.js ≥ 22.
 

@@ -47,7 +47,6 @@ export interface Config {
   /** Set to true (or env `DSH_LARK_DISABLED=1`) to keep the bridge stopped. */
   disabled?: boolean;
 }
-
 export const DSH_LARK_SETTINGS_NAMESPACE = settingsNamespace('dsh-lark-bot');
 
 /**
@@ -189,6 +188,7 @@ export class LarkBridgeService extends Service {
 
 export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) {
   const service = new LarkBridgeService(ctx);
+  const webHost = hasWebServer(ctx);
   const detachTui = attachOptionalTuiSeams(ctx);
   let source = () => config;
   let appliedConfig: Config | undefined;
@@ -212,7 +212,7 @@ export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) 
         }
         await service.stop();
         if (disposed || ticket !== revision) return;
-        if (!isDisabled(desired)) {
+        if (!isDisabled(desired) && !webHost) {
           const engine = await service.start(desired, deps);
           ctx.logger.info(
             `[dsh-lark-bot] bridge engine running (profile=${engine.profile}, home=${engine.home})`,
@@ -266,7 +266,7 @@ export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) 
 
   const disabled = isDisabled(config);
   ctx.logger.info(
-    `[dsh-lark-bot] bundle loaded; bridge engine ${disabled ? 'disabled (DSH_LARK_DISABLED=1)' : 'will start in-process'}`,
+    `[dsh-lark-bot] bundle loaded; ${webHost ? 'web profile integration only; Feishu bridge is disabled' : disabled ? 'bridge engine disabled (DSH_LARK_DISABLED=1)' : 'bridge engine will start in-process'}`,
   );
   // Cordis uses the plugin's returned disposer to run cleanup when the fiber
   // unloads (profile stop / reload / `dsh plugin remove`).
@@ -301,6 +301,14 @@ async function hydrateSettingsBase(config: Config, baseEnv: NodeJS.ProcessEnv): 
   if (workspace !== undefined) hydrated.workspace = workspace;
   if (model !== undefined) hydrated.model = model;
   return hydrated;
+}
+
+function hasWebServer(ctx: Context): boolean {
+  try {
+    return Boolean(ctx.get('webServer'));
+  } catch {
+    return false;
+  }
 }
 
 function isDisabled(config: Config): boolean {

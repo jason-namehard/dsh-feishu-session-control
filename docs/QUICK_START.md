@@ -20,9 +20,11 @@ npx dsh-lark-bot@latest setup --profile dsh-lark
 > `dsh-lark-bot setup`。装好 dsh 并配好 `DEEPSEEK_API_KEY` 后，**安装 → 启动 → 扫码绑定 = 30 秒**。
 
 `setup` 会：定位本机 dsh → 预批准 pnpm 构建策略（protobufjs 等；既有 profile 同时固定到其
-安装元数据记录的精确 pnpm 版本，避免 Corepack/store 主版本冲突）→ 执行标准
-`dsh plugin --profile dsh-lark add dsh-lark-bot`，把本插件作为标准 bundle 装进 profile，
-并**默认同时安装「安全网守护」**（见第 6 节；不需要时加 `--no-guardian` 跳过）。
+安装元数据记录的精确 pnpm 版本，避免 Corepack/store 主版本冲突）→ 将同一 bundle 安装到
+`dsh-lark` 桥接 profile 和 `web` 会话管理 profile → **默认同时安装「安全网守护」**（见第
+6 节；不需要时加 `--no-guardian` 跳过）。Web profile 只挂载会话管理，不启动第二个飞书桥接。
+
+如只需要飞书桥接，可加 `--no-web`；也可用 `--web-profile <name>` 指定 Web profile 名称。
 
 开发阶段也可以先 `pnpm install && pnpm build`，再用
 `DSH_LARK_SETUP_PACKAGE=/path/to/dsh-lark-bot-x.y.z.tgz node dist/cli.js setup --profile dsh-lark`
@@ -248,7 +250,17 @@ shell 调用仍按高风险处理。等待仅暂停
 若普通消息正常但所有卡片按钮完全无响应，请在飞书开放平台进入“事件与回调 → 回调配置”，启用
 卡片回调并重新发布应用；新版扫码向导会自动申请 `card.action.trigger`，旧版创建的应用需补做一次。
 
-## 6. 安全网守护（默认安装）· Safety-net guardian
+## 6. DSH Web 会话管理整合
+
+本项目把 Web 会话管理、归档、回收站、恢复、永久清理、详情和跨工作区移动整合到同一个 `dsh-lark-bot` 包中。需要 Web 管理面板时，在 `web` profile 安装同一版本的包：
+
+```bash
+dsh plugin --profile web add dsh-lark-bot@<version>
+```
+
+Web profile 只启用会话管理，不会启动第二个飞书桥接。完整生命周期说明见 [`docs/SESSION_MANAGEMENT.md`](SESSION_MANAGEMENT.md)。
+
+## 7. 安全网守护（默认安装）· Safety-net guardian
 
 dsh 采用「一切皆插件」架构，任何第三方插件都可能让整个 profile boot 失败。此时桥接引擎与
 dsh 一起下线，飞书入口不可用。因此 `setup` **默认安装**一个**独立于 dsh 进程**的最小守护，

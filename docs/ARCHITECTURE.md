@@ -1,6 +1,7 @@
 # 架构 · Architecture
 
-> 本文件描述 dsh-lark-bot 的总体架构与分层设计，仍在演进中。
+> 本文件描述 **DSH飞书session管理** 的总体架构与分层设计，仍在演进中。
+> npm/DSH 兼容包名仍为 `dsh-lark-bot`。
 > This document describes the overall architecture and layering of dsh-lark-bot. Still evolving.
 
 ## 分层 · Layering

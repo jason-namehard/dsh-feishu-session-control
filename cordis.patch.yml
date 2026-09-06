@@ -1,4 +1,4 @@
-# dsh-lark-bot as a profile bundle.
+﻿# dsh-lark-bot as a profile bundle.
 #
 # Installed with `dsh plugin --profile <name> add dsh-lark-bot` (or the single
 # `dsh-lark-bot setup` command), dsh appends this package to the profile's
@@ -31,6 +31,9 @@
         scopeConcurrency: !!js 'process.env.DSH_LARK_SCOPE_CONCURRENCY ? Number(process.env.DSH_LARK_SCOPE_CONCURRENCY) : undefined'
         notificationDefault: !!js process.env.DSH_LARK_NOTIFICATION_DEFAULT
         disabled: !!js process.env.DSH_LARK_DISABLED === '1'
+
+    - id: dsh-session-manager
+      name: 'dsh-lark-bot/session-manager'
 
     - id: lark-notify
       name: 'dsh-lark-bot/notify'

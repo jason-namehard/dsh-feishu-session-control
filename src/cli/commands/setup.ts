@@ -11,6 +11,8 @@ import { installGuardian } from '../../guardian/install.js';
 export interface SetupOptions {
   /** dsh profile to install the bundle into (default `dsh-lark`). */
   profile?: string;
+  /** dsh Web profile to install the session-management routes into (default `web`). */
+  webProfile?: string | false;
   /** Package spec for `dsh plugin add` (defaults to this package's npm name). */
   packageSpec?: string;
   /** DSH_HOME override (tests). */
@@ -33,7 +35,10 @@ export interface SetupOptions {
  * the QR code for one-time Feishu binding.
  */
 export async function runSetup(options: SetupOptions = {}): Promise<void> {
-  const profile = options.profile ?? 'dsh-lark';
+  const profile = normalizeProfileName(options.profile ?? 'dsh-lark');
+  const webProfile = options.webProfile === false
+    ? undefined
+    : normalizeProfileName(options.webProfile ?? 'web');
   const own = ownPackageInfo();
   // Pin the running package's exact version. Registry installs MUST NOT rely
   // on pnpm's bare-name `latest` resolution: on some environments it resolves
@@ -65,6 +70,16 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   );
   await runDshPlugin(bin, profile, packageSpec, { ...process.env, DSH_HOME: dshHome });
 
+  if (webProfile && webProfile !== profile) {
+    const webProfileDir = join(dshHome, 'profiles', webProfile);
+    await mkdir(webProfileDir, { recursive: true });
+    await approveBuilds(webProfileDir);
+    process.stdout.write(
+      `Installing ${packageSpec} into dsh Web profile \`${webProfile}\` (DSH_HOME=${dshHome})...\n`,
+    );
+    await runDshPlugin(bin, webProfile, packageSpec, { ...process.env, DSH_HOME: dshHome });
+  }
+
   if (installGuardianService) {
     const install = options.installGuardianFn ?? installGuardian;
     const guardianResult = await install({
@@ -87,6 +102,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
       '✅ 安装完成。启动方式（唯一的部署路径）：',
       '',
       `  ${options.dshHome ? `DSH_HOME=${JSON.stringify(dshHome)} ` : ''}dsh --profile ${profile}`,
+      ...(webProfile && webProfile !== profile
+        ? [`  ${options.dshHome ? `DSH_HOME=${JSON.stringify(dshHome)} ` : ''}dsh --profile ${webProfile}`]
+        : []),
       '',
       '首次启动会在终端打印二维码，用飞书 / Lark 扫码完成一次性绑定；',
       '绑定后 dsh 即以标准插件方式加载 dsh-lark-bot 的桥接引擎。',
@@ -104,6 +122,12 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
       '',
     ].join('\n'),
   );
+}
+
+function normalizeProfileName(value: string): string {
+  const profile = value.trim();
+  if (!profile) throw new Error('dsh profile name must not be empty');
+  return profile;
 }
 
 export function runDshPlugin(

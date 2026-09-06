@@ -1,4 +1,4 @@
-<h1 align="center">dsh-lark-bot</h1>
+<h1 align="center">DSH飞书session管理</h1>
 
 <p align="center">🌏 <a href="README_EN.md">English</a> · 🌐 官网wiki <a href="https://dsh-lark-bot.arr2018.dpdns.org">dsh-lark-bot.arr2018.dpdns.org</a></p>
 
@@ -18,7 +18,9 @@
   <a href="https://github.com/PlutoKeating/dsh-lark-bot/releases"><img src="https://img.shields.io/github/v/release/PlutoKeating/dsh-lark-bot?sort=semver&label=latest%20release" alt="Latest release"></a>
 </p>
 
-## 产品简介
+## 项目简介
+
+本项目正式名称为 **DSH飞书session管理**；npm/DSH 兼容包名暂保留为 `dsh-lark-bot`，以避免破坏现有 profile。
 
 让 DeepSeek Harness 成为你飞书里的一员，在手机、群聊、话题里直接指挥本机 coding agent。
 走飞书 WebSocket 长连接，**不需要公网 IP、域名、服务器或内网穿透**；Linux / macOS / Windows 通用，Node.js ≥ 22。
@@ -30,8 +32,9 @@
 **前置**：本机已安装 DeepSeek Harness（`dsh`）并配置好 `DEEPSEEK_API_KEY`；Node.js ≥ 22.19；一个飞书 / Lark 账号。
 
 ```bash
-npx dsh-lark-bot@latest setup --profile dsh-lark   # ① 一键安装（装进 dsh profile + 默认装「安全网守护」）
-dsh --profile dsh-lark                              # ② 启动
+npx dsh-lark-bot@latest setup --profile dsh-lark   # ① 一键安装 dsh-lark + web + Guardian
+dsh --profile dsh-lark                              # ② 启动飞书桥接
+dsh --profile web                                   # ③ 按需启动 Web 会话管理面板
 ```
 
 ③ 首次启动终端打印二维码 → 飞书 App 扫码创建或选择 PersonalAgent 应用 → 绑定后直接私聊发消息；群聊 / 话题默认 `@bot`。
@@ -49,7 +52,7 @@ dsh --profile dsh-lark                              # ② 启动
 
 - **安全网守护**：dsh 崩溃后飞书仍会回复你，`/safemode` 进入仅核心安全模式直接自愈；重启后自动恢复排队任务，`/jobs` 可显式重试。多数桥接方案是「串行单聊 + 崩溃就失联」。
 - **多机器人可信交接**：`bot add` 增加独立实例，可信机器人在同群真实 @ 交接，连续协作有上限。
-- **完善的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/session` 浏览 / 绑定会话，`/sessions`、`/use`、`/delete` 通过稳定别名管理 DSH 会话，`/archive` + `/retention` 自动归档与清理，会话列表不会烂掉。
+- **统一的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/session`、`/sessions`、`/use`、`/delete` 通过稳定别名管理 DSH 会话；Web 端同时提供归档、恢复、回收站、永久清理、详情和跨工作区移动，不再要求额外安装多个会话插件。
 - **完善的版本管理机制**：管理员直接在飞书发 `/upgrade` 后台更新、验证并重载；有新版本才提醒，不打断当前工作。
 - **dsh Web 可视化设置**：官方 Settings → Plugins 页面点选工作目录、模型、并行数、提醒，不用背环境变量。
 

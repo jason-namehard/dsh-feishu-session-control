@@ -54,11 +54,14 @@ export function buildProgram(): Command {
       'Install this package as a standard dsh profile bundle (single install path)',
     )
     .option('--profile <name>', 'dsh profile to install into (default: dsh-lark)')
+    .option('--web-profile <name>', 'dsh Web profile for integrated session management (default: web)')
+    .option('--no-web', 'skip installing the integrated session-management Web profile')
     .option('--guardian', 'install the safety-net guardian service (installed by default; compatibility)')
     .option('--no-guardian', 'skip installing the safety-net guardian service (installed by default)')
-    .action(async (opts: { profile?: string; guardian?: boolean }) => {
+    .action(async (opts: { profile?: string; webProfile?: string; web?: boolean; guardian?: boolean }) => {
       await runSetup({
         ...(opts.profile ? { profile: opts.profile } : {}),
+        ...(opts.web === false ? { webProfile: false as const } : opts.webProfile ? { webProfile: opts.webProfile } : {}),
         guardian: opts.guardian !== false,
       });
     });

@@ -10,7 +10,7 @@ import {
   resolveGuardianCliEntry,
   stableGuardianServicePath,
   systemdUnit,
-  windowsStartupCmd,
+  windowsStartupVbs,
 } from '../../src/guardian/install.js';
 import { loadGuardianState, newGuardianState } from '../../src/guardian/state.js';
 
@@ -19,7 +19,6 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
-
 describe('guardian service units', () => {
   it('renders a systemd user unit', () => {
     const unit = systemdUnit('/usr/bin/node', '/home/u/dsh-lark-bot/dist/cli.js', {
@@ -55,8 +54,10 @@ describe('guardian service units', () => {
     expect(plist).toContain('<string>guardian</string>');
     expect(plist).toContain('<key>KeepAlive</key><true/>');
 
-    const cmd = windowsStartupCmd('node.exe', 'C:\\app\\dist\\cli.js');
-    expect(cmd).toContain('start "" /b "node.exe" "C:\\app\\dist\\cli.js" guardian run');
+    const script = windowsStartupVbs('node.exe', 'C:\\app\\dist\\cli.js');
+    expect(script).toContain('WScript.Shell');
+    expect(script).toContain('guardian run');
+    expect(script).toContain(', 0, False');
   });
 
   it('persists the profile mapping without touching the service manager (dry run)', async () => {

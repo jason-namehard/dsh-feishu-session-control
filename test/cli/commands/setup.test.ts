@@ -88,6 +88,7 @@ describe('dsh-lark-bot setup', () => {
       });
       await runSetup({
         profile: 'demo',
+        webProfile: false,
         dshHome: home,
         bin: '/fake/dsh/bin.js',
         installGuardianFn,
@@ -131,6 +132,7 @@ describe('dsh-lark-bot setup', () => {
 
       await runSetup({
         profile: 'demo',
+        webProfile: false,
         dshHome: home,
         bin: '/fake/dsh/bin.js',
         packageSpec: '/tmp/dsh-lark-bot-0.9.1.tgz',
@@ -171,6 +173,7 @@ describe('dsh-lark-bot setup', () => {
       });
       await runSetup({
         profile: 'demo',
+        webProfile: false,
         dshHome: home,
         bin: '/fake/dsh/bin.js',
         guardian: true,
@@ -207,6 +210,7 @@ describe('dsh-lark-bot setup', () => {
       const installGuardianFn = vi.fn();
       await runSetup({
         profile: 'demo',
+        webProfile: false,
         dshHome: home,
         bin: '/fake/dsh/bin.js',
         guardian: false,
@@ -216,6 +220,46 @@ describe('dsh-lark-bot setup', () => {
       expect(installGuardianFn).not.toHaveBeenCalled();
       expect(stdout.join('')).toContain('--no-guardian');
       expect(stdout.join('')).toContain('未安装安全网守护');
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  it('installs the same bundle into the bridge and Web profiles by default', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-setup-both-'));
+    tempDirs.push(home);
+    const spawnMock = vi.mocked(spawn);
+    spawnMock.mockImplementation((() => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('exit', 0));
+      return child as unknown as ReturnType<typeof spawn>;
+    }) as never);
+
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    try {
+      await runSetup({
+        profile: 'demo',
+        dshHome: home,
+        bin: '/fake/dsh/bin.js',
+        guardian: false,
+      });
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(spawnMock).toHaveBeenNthCalledWith(
+        1,
+        'node',
+        ['/fake/dsh/bin.js', 'plugin', '--profile', 'demo', 'add', expect.stringMatching(/^dsh-lark-bot@/u)],
+        { stdio: 'inherit', env: expect.objectContaining({ DSH_HOME: home }) },
+      );
+      expect(spawnMock).toHaveBeenNthCalledWith(
+        2,
+        'node',
+        ['/fake/dsh/bin.js', 'plugin', '--profile', 'web', 'add', expect.stringMatching(/^dsh-lark-bot@/u)],
+        { stdio: 'inherit', env: expect.objectContaining({ DSH_HOME: home }) },
+      );
+      await expect(readFile(join(home, 'profiles', 'web', 'pnpm-workspace.yaml'), 'utf8'))
+        .resolves.toContain('allowBuilds:');
     } finally {
       process.stdout.write = originalWrite;
     }

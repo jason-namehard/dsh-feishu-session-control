@@ -20,7 +20,7 @@ import {
  * The guardian is a minimal Node process that must survive dsh / Cordis
  * going down, so it is registered with the operating system's user-level
  * service manager (systemd user unit on Linux, launchd LaunchAgent on macOS,
- * Startup entry on Windows). The unit only runs `dsh-lark-bot guardian run`;
+ * hidden Startup entry on Windows). The unit only runs `dsh-lark-bot guardian run`;
  * all dsh knowledge lives in `~/.dsh-lark/guardian.json`.
  */
 
@@ -90,7 +90,7 @@ function serviceDirectory(platform: NodeJS.Platform, root: string): string {
 
 /**
  * The exact service-entry file for the current platform (systemd unit,
- * launchd plist, Windows startup .cmd or fallback shell script). Used both by
+ * launchd plist, Windows startup .vbs or fallback shell script). Used both by
  * install/uninstall and by the upgrade command to detect whether the guardian
  * is installed.
  */
@@ -105,7 +105,7 @@ export function guardianServiceFilePath(
     case 'darwin':
       return join(directory, `io.dsh-lark.${GUARDIAN_LABEL}.plist`);
     case 'win32':
-      return join(directory, `${GUARDIAN_LABEL}.cmd`);
+      return join(directory, `${GUARDIAN_LABEL}.vbs`);
     default:
       return join(directory, `${GUARDIAN_LABEL}.sh`);
   }
@@ -184,16 +184,27 @@ export function launchdPlist(
   ].join('\n');
 }
 
-export function windowsStartupCmd(
+export function windowsStartupVbs(
   nodeBin: string,
   cliEntry: string,
 ): string {
+  const command = `${quoteWindowsArg(nodeBin)} ${quoteWindowsArg(cliEntry)} guardian run`;
   return [
-    '@echo off',
-    'REM dsh-lark-bot safety-net guardian - keep the Feishu rescue entrance alive.',
-    `start "" /b "${nodeBin}" "${cliEntry}" guardian run`,
+    "' dsh-lark-bot safety-net guardian - keep the Feishu rescue entrance alive.",
+    'Option Explicit',
+    'Dim sh',
+    'Set sh = CreateObject("WScript.Shell")',
+    `sh.Run ${quoteVbString(command)}, 0, False`,
     '',
   ].join('\r\n');
+}
+
+function quoteWindowsArg(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function quoteVbString(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 function defaultRun(
@@ -272,9 +283,10 @@ export async function installGuardian(
       return { ok: false, messages };
     }
   } else if (process.platform === 'win32') {
-    const cmdPath = guardianServiceFilePath(process.platform, root);
-    await writeFile(cmdPath, windowsStartupCmd(nodeBin, cliEntry), 'utf8');
-    messages.push(`Windows 启动项已写入 ${cmdPath}（登录后自动常驻）。`);
+    const scriptPath = guardianServiceFilePath(process.platform, root);
+    await writeFile(scriptPath, windowsStartupVbs(nodeBin, cliEntry), 'utf8');
+    await rm(join(dirname(scriptPath), `${GUARDIAN_LABEL}.cmd`), { force: true });
+    messages.push(`Windows 隐藏启动项已写入 ${scriptPath}（登录后自动常驻，无 CMD 窗口）。`);
   } else {
     const fallbackPath = guardianServiceFilePath(process.platform, root);
     await writeFile(
@@ -319,6 +331,7 @@ export async function uninstallGuardian(
       'Programs',
       'Startup',
     );
+    await rm(join(startupDir, `${GUARDIAN_LABEL}.vbs`), { force: true });
     await rm(join(startupDir, `${GUARDIAN_LABEL}.cmd`), { force: true });
     messages.push('Windows 启动项已移除。');
   } else {
