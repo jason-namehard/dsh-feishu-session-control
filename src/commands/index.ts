@@ -245,6 +245,10 @@ const HELP_EN = [
   '- `/doctor` — generate and send a redacted diagnostic bundle (admin)',
   '- `/resume` — show recent context for this session',
   '- `/session [current|bind <sessionId>]` — explicitly select, confirm, and bind a DSH session in this workspace',
+  '- `/sessions` — list DSH sessions and stable aliases',
+  '- `/use <MMDD-N>` — switch to a named DSH session after confirmation',
+  '- `/delete <MMDD-N>` — move a named DSH session to the recycle bin after confirmation',
+  '- `/purge <MMDD-N>` — permanently delete a named DSH session after confirmation',
   '- `/stop` — stop current tasks',
   '- `/timeout [N|off|default]` — view or set the idle timeout',
   '- `/concurrency [N|default]` — view or set parallel runs for this scope',
@@ -1358,7 +1362,7 @@ async function handleSessionProjection(args: string, ctx: CommandContext): Promi
 }
 
 async function handleSessionAliases(
-  command: 'sessions' | 'use' | 'delete',
+  command: 'sessions' | 'use' | 'delete' | 'purge',
   args: string,
   ctx: CommandContext,
 ): Promise<void> {
@@ -1389,6 +1393,7 @@ const handlers: Record<string, Handler> = {
   '/sessions': (args, ctx) => handleSessionAliases('sessions', args, ctx),
   '/use': (args, ctx) => handleSessionAliases('use', args, ctx),
   '/delete': (args, ctx) => handleSessionAliases('delete', args, ctx),
+  '/purge': (args, ctx) => handleSessionAliases('purge', args, ctx),
   '/stop': handleStop,
   '/timeout': handleTimeout,
   '/concurrency': handleConcurrency,

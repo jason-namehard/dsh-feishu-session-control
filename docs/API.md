@@ -624,17 +624,18 @@ export async function buildAgentAdapter(
   fail closed，覆盖远端成功与本地
   cursor 落盘之间的崩溃窗口。低序号幂等跳过，未知必需事件 fail closed；cursor 只在飞书交付成功后前移。
 - `src/commands/session-projection.ts`：`/session`、`/session bind <id>`、`/session current`，以及
-  `/sessions`、`/use <MMDD-N>`、`/delete <MMDD-N>`。选择器仅列当前 canonical workspace 的非
-  subagent 元数据；绑定和删除确认 nonce 固化 operator/scope/workspace、一次性且超时失效。
+  `/sessions`、`/use <MMDD-N>`、`/delete <MMDD-N>`、`/purge <MMDD-N>`。选择器仅列当前 canonical
+  workspace 的非 subagent 元数据；绑定、移入回收站和永久清理确认 nonce 固化
+  operator/scope/workspace、一次性且超时失效。
 - `src/session/alias-manager.ts`：以原子写入持久化默认工作区的 `.session_aliases.json`，生成
   `MMDD-N` 别名；删除只移除目标条目，不重排同日其他编号。`/sessions` 刷新时同步现存 native
   session，并清理从 DSH WebUI 删除后留下的陈旧映射。
 - `src/card/session-alias-card.ts`：渲染包含别名、会话名称、状态和 native ID 的删除确认卡；按钮值
   携带原始操作者、scope、workspace 与一次性 nonce，服务端再次校验后才调用删除。
 - `WebDshAdapter` 通过 `session.create` 创建新会话，并调用本机 DSH Web host 的
-  `/__chameleon/session/delete` 路由；该路由由已安装的 `workbench_session_delete` 插件实现，
-  负责停止任务、删除 session 日志、projection cache 和 workspace accounting。飞书入口仍只使用
-  WebSocket 长连接，删除路由是 bridge 到本机 Web host 的回环调用，不是公网入口。
+  `/__chameleon/session/delete` 与 `/__chameleon/session/purge` 路由。前者将会话移入可恢复回收站，
+  后者永久清理回收站中的记录；飞书入口仍只使用 WebSocket 长连接，这些路由是 bridge 到本机
+  Web host 的回环调用，不是公网入口。
 
 历史确认卡在发出正文前显示标题、session ID、workspace、更新时间、回填数量、当前 scope 与替换/
 迁移信息。私聊授权用户可绑定；member 只能绑定自己的 scope；共享 group/topic 与跨 scope 独占迁移

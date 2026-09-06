@@ -51,7 +51,7 @@ app → once bound, message the bot directly; groups / threads default to `@bot`
 
 - **Safety-net guardian**: Feishu still replies if dsh crashes; `/safemode` opens a core-only safe mode to self-heal, queued tasks are restored on restart, and `/jobs` retries explicitly. Most bridges are "serial single chat + lost on crash".
 - **Multi-bot trusted hand-off**: `bot add` adds independent instances and trusted bots hand off with a real @ in the same group, capped.
-- **Full workspace & session management**: an isolated git worktree is auto-created per session; `/session` lists / binds sessions and `/archive` + `/retention` auto-archive and clean up, so the session list never gets cluttered.
+- **Full workspace & session management**: an isolated git worktree is auto-created per session; `/session` lists / binds sessions, while `/sessions`, `/use`, `/delete`, and `/purge` manage named Web sessions from Feishu. `/archive` + `/retention` also keep the session list tidy.
 - **Robust version management**: an admin just sends `/upgrade` in Feishu to update, verify, and reload in the background; you're only nudged when a new version exists, with no interruption to current work.
 - **dsh Web visual settings**: point-and-click work dir, model, concurrency, and reminders in Settings → Plugins — no env vars to memorize.
 
@@ -81,6 +81,10 @@ Command help, status, and cards are bilingual; `/help` is the full authoritative
 | `/ws list\|save\|use\|remove` | Manage named workspaces |
 | `/jobs [list\|show\|retry]` | Reconcile and retry queued/running/failed/interrupted jobs |
 | `/session`、`/session bind` | Browse / explicitly bind a DSH session |
+| `/sessions` | List DSH sessions and stable `MMDD-N` aliases |
+| `/use <alias>` | Open the confirmation card to switch to a named session |
+| `/delete <alias>` | Move a named session to the recoverable recycle bin after confirmation |
+| `/purge <alias>` | Permanently delete a named session after confirmation |
 | `/role list\|show\|set\|clear` | View / bind roles |
 | `/notify <scope\|chatId> <text>` | Cross-session notification (admin) |
 | `/notifications [show\|off\|on …]` | Configure completion / failure / approval / urgent reminders (`sinks=` forwards to other IM channels) |
@@ -92,11 +96,10 @@ Command help, status, and cards are bilingual; `/help` is the full authoritative
 
 ---
 
-> **⚠️ Official channels only**: the only official repo is [PlutoKeating/dsh-lark-bot](https://github.com/PlutoKeating/dsh-lark-bot),
-> and the only official npm packages are `dsh-lark-bot` / `dsh-feishu-bot` (maintainer `plutokeating`). This project
-> **never ships a Windows .exe or a "download & run" installer** — any page or repo distributing one under its name
-> is **fake / malicious**. The only official install command is `npx dsh-lark-bot@latest setup --profile dsh-lark`.
-> See the Security notice below.
+> **Source notice**: this project is maintained by **见川** as a new integration and refactoring project based on
+> `PlutoKeating/dsh-lark-bot`, DeepSeek Harness, and `dsh-sessions-manager`. It is not the upstream repository and
+> does not represent the upstream author. The new GitHub repository address will be configured before publication.
+> This project never ships a Windows `.exe` or a "download & run" installer.
 
 ## FAQ
 
@@ -109,8 +112,8 @@ Command help, status, and cards are bilingual; `/help` is the full authoritative
 **Q: How is this different from other DeepSeek Harness Feishu plugins?**
 **A:** The most complete feature set: safety-net guardian, parallel tasks, multi-role agents, multi-bot hand-off, persistent job ledger, session archive, cross-session notify, dsh Web visual settings, in-chat model & key management, execution modes, plan gate, and in-Feishu self-update. It's a standard dsh profile bundle and `setup` is the only install path.
 
-**Q: Could there be a fake version?**
-**A:** The only official repo / npm packages are above under "Official channels only"; this project never ships an `.exe` or a "download & run" installer — anything distributing an exe is fake.
+**Q: Where are the source and license notices?**
+**A:** This project is maintained by 见川. Upstream and third-party source notices are listed in [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES).
 
 ---
 
@@ -147,7 +150,8 @@ npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes   # upgrade (or admin /
 ## About the project
 
 - **Development**: `pnpm install && pnpm typecheck && pnpm test && pnpm build`; delivery standards in [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md), AI-agent workflow in [`AGENTS.md`](AGENTS.md). Dual-package publish `pnpm publish:dual` (`dsh-lark-bot` + `dsh-feishu-bot`, shared dist).
-- **Author**: **PlutoKeating** ([profile](https://github.com/PlutoKeating)).
+- **Maintainer**: **见川**.
+- **Source and licenses**: see [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES).
 - **Contributors**: [zhuguangjun2002](https://github.com/zhuguangjun2002) · [chensimo1992-sys](https://github.com/chensimo1992-sys) · [estelledc](https://github.com/estelledc) · [fredjiangyysx](https://github.com/fredjiangyysx) · [Geoffrey-hougaojie](https://github.com/Geoffrey-hougaojie) · [hellxiaoao](https://github.com/hellxiaoao) · [koprivnikarurnaa-oss](https://github.com/koprivnikarurnaa-oss) · [Normanyin](https://github.com/Normanyin) · [pancong0711](https://github.com/pancong0711) · [qvivp](https://github.com/qvivp).
 - **Docs**: `QUICK_START` (install / quick start) · `MANUAL` (full manual + commands + env vars) · `FEATURES` (capability behavior) · `COMPATIBILITY` · `ARCHITECTURE` · `API` · `roadmap`.
 

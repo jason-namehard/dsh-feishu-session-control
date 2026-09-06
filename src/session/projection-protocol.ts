@@ -9,6 +9,7 @@ export interface DshSessionSummary {
   parentSessionId?: string;
   origin?: 'subagent';
   title?: string;
+  trashed?: boolean;
 }
 
 export interface DshSessionEvent {
@@ -26,12 +27,14 @@ export interface DshHistoryPage {
   hasMore: boolean;
 }
 
-export interface SessionDeleteResult {
-  stopped: boolean;
-  detached: boolean;
-  dirRemoved: boolean;
-  projRemoved: boolean;
-  workspaceRemoved: boolean;
+export interface SessionTrashResult {
+  ok: true;
+  trashed: true;
+}
+
+export interface SessionPurgeResult {
+  ok: true;
+  purged: true;
 }
 
 export interface SessionProjectionSource {
@@ -40,14 +43,17 @@ export interface SessionProjectionSource {
   prompt(sessionId: string, text: string, rpcId?: string): Promise<{ rpcId: string }>;
   openMux(): Promise<WebSocket>;
   createSession?(cwd: string): Promise<string>;
-  deleteSession?(sessionId: string): Promise<SessionDeleteResult>;
+  deleteSession?(sessionId: string): Promise<SessionTrashResult>;
+  purgeSession?(sessionId: string): Promise<SessionPurgeResult>;
 }
 
 export interface WebProjectionTransport {
   rpc<T = unknown>(method: string, payload: unknown, rpcId?: string): Promise<T>;
   openMux(): Promise<WebSocket>;
   createSession?(cwd: string): Promise<string>;
-  deleteSession?(sessionId: string): Promise<SessionDeleteResult>;
+  deleteSession?(sessionId: string): Promise<SessionTrashResult>;
+  purgeSession?(sessionId: string): Promise<SessionPurgeResult>;
+  listTrashedSessionIds?(): Promise<Set<string>>;
 }
 
 /** Typed, validation-owning facade over the rc.8 Web host session RPCs. */
@@ -57,6 +63,9 @@ export class WebSessionProjectionSource implements SessionProjectionSource {
   async listSessions(): Promise<DshSessionSummary[]> {
     const value = responseValue(await this.transport.rpc('session.list', {}));
     if (!isRecord(value) || !Array.isArray(value.items)) throw new Error('invalid session.list response');
+    const trashedIds = this.transport.listTrashedSessionIds
+      ? await this.transport.listTrashedSessionIds()
+      : new Set<string>();
     return value.items.flatMap((item) => {
       if (!isRecord(item) || typeof item.sessionId !== 'string' || typeof item.updatedAt !== 'number') return [];
       const projections = isRecord(item.projections) && isRecord(item.projections.values)
@@ -74,6 +83,7 @@ export class WebSessionProjectionSource implements SessionProjectionSource {
         ...(typeof item.parentSessionId === 'string' ? { parentSessionId: item.parentSessionId } : {}),
         ...(item.origin === 'subagent' ? { origin: 'subagent' as const } : {}),
         ...(title ? { title } : {}),
+        ...(trashedIds.has(item.sessionId) ? { trashed: true } : {}),
       };
       return [summary];
     });
@@ -118,9 +128,14 @@ export class WebSessionProjectionSource implements SessionProjectionSource {
     return value.sessionId;
   }
 
-  async deleteSession(sessionId: string): Promise<SessionDeleteResult> {
+  async deleteSession(sessionId: string): Promise<SessionTrashResult> {
     if (!this.transport.deleteSession) throw new Error('session deletion is unavailable for this adapter');
     return this.transport.deleteSession(sessionId);
+  }
+
+  async purgeSession(sessionId: string): Promise<SessionPurgeResult> {
+    if (!this.transport.purgeSession) throw new Error('permanent session deletion is unavailable for this adapter');
+    return this.transport.purgeSession(sessionId);
   }
 }
 

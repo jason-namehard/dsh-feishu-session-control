@@ -52,7 +52,7 @@ dsh --profile web                                   # ③ 按需启动 Web 会�
 
 - **安全网守护**：dsh 崩溃后飞书仍会回复你，`/safemode` 进入仅核心安全模式直接自愈；重启后自动恢复排队任务，`/jobs` 可显式重试。多数桥接方案是「串行单聊 + 崩溃就失联」。
 - **多机器人可信交接**：`bot add` 增加独立实例，可信机器人在同群真实 @ 交接，连续协作有上限。
-- **统一的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/session`、`/sessions`、`/use`、`/delete` 通过稳定别名管理 DSH 会话；Web 端同时提供归档、恢复、回收站、永久清理、详情和跨工作区移动，不再要求额外安装多个会话插件。
+- **统一的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/session`、`/sessions`、`/use`、`/delete`、`/purge` 通过稳定别名管理 DSH 会话；Web 端同时提供归档、恢复、回收站、永久清理、详情和跨工作区移动，不再要求额外安装多个会话插件。
 - **完善的版本管理机制**：管理员直接在飞书发 `/upgrade` 后台更新、验证并重载；有新版本才提醒，不打断当前工作。
 - **dsh Web 可视化设置**：官方 Settings → Plugins 页面点选工作目录、模型、并行数、提醒，不用背环境变量。
 
@@ -78,7 +78,8 @@ dsh --profile web                                   # ③ 按需启动 Web 会�
 | `/new` `/reset` | 开始新会话 |
 | `/sessions` | 列出 DSH 会话及稳定别名（`MMDD-N`） |
 | `/use <alias>` | 通过别名切换 DSH 会话（需确认） |
-| `/delete <alias>` | 通过别名删除 DSH 会话（需二次确认） |
+| `/delete <alias>` | 通过别名将 DSH 会话移入回收站（需二次确认） |
+| `/purge <alias>` | 通过别名永久清理 DSH 会话（需二次确认） |
 | `/status` | 查看状态卡（工作区 / 模型 / session / run / token / 任务账本） |
 | `/mode`（`/effort`） | 选择快速 / 平衡 / 深度任务强度 |
 | `/cd <path>` | 切到该目录的独立会话 |
@@ -96,10 +97,9 @@ dsh --profile web                                   # ③ 按需启动 Web 会�
 
 ---
 
-> **⚠️ 仅认准官方渠道**：唯一官方仓库 [PlutoKeating/dsh-lark-bot](https://github.com/PlutoKeating/dsh-lark-bot)，
-> 唯一官方 npm 包 `dsh-lark-bot` / `dsh-feishu-bot`（维护者 `plutokeating`）。本项目**从不提供 .exe 或
-> “下载即运行”的安装包**，任何以此名义分发的页面 / 仓库均为**假冒 / 恶意来源**。官方安装唯一命令：
-> `npx dsh-lark-bot@latest setup --profile dsh-lark`。详见文末「安全提醒」。
+> **来源说明**：本项目由 **见川** 维护，是基于 `PlutoKeating/dsh-lark-bot`、DeepSeek Harness
+> 及 `dsh-sessions-manager` 等开源组件进行整合和重构的新项目，不代表上游作者，也不是上游仓库的 PR。
+> 发布地址以本项目后续配置的新 GitHub 仓库为准；本项目从不提供 `.exe` 或“下载即运行”的安装包。
 
 ## 常见问题
 
@@ -150,7 +150,8 @@ npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes   # 升级（或飞书�
 ## 关于项目
 
 - **开发**：`pnpm install && pnpm typecheck && pnpm test && pnpm build`；生态交付标准见 [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md)，AI Agent 工作流见 [`AGENTS.md`](AGENTS.md)。双包发布 `pnpm publish:dual`（`dsh-lark-bot` + `dsh-feishu-bot`，共享 dist）。
-- **作者**：**PlutoKeating**（[主页](https://github.com/PlutoKeating)）。
+- **维护者**：**见川**。
+- **来源与许可证**：上游及第三方来源、许可证和保留声明见 [`NOTICE.md`](NOTICE.md) 与 [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES)。
 - **协作者**：[zhuguangjun2002](https://github.com/zhuguangjun2002) · [chensimo1992-sys](https://github.com/chensimo1992-sys) · [estelledc](https://github.com/estelledc) · [fredjiangyysx](https://github.com/fredjiangyysx) · [Geoffrey-hougaojie](https://github.com/Geoffrey-hougaojie) · [hellxiaoao](https://github.com/hellxiaoao) · [koprivnikarurnaa-oss](https://github.com/koprivnikarurnaa-oss) · [Normanyin](https://github.com/Normanyin) · [pancong0711](https://github.com/pancong0711) · [qvivp](https://github.com/qvivp)。
 - **文档**：`QUICK_START`（安装/快速开始）· `MANUAL`（完整手册+命令+环境变量）· `FEATURES`（能力行为细节）· `COMPATIBILITY`· `ARCHITECTURE`· `API`· `roadmap`。
 

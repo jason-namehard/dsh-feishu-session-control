@@ -84,19 +84,27 @@ describe('WebDshAdapter session lifecycle', () => {
         status: 200, headers: { 'content-type': 'application/json' },
       }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        ok: true, stopped: false, detached: true, dirRemoved: true, projRemoved: true, workspaceRemoved: true,
+        ok: true, trashed: true,
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true, purged: true,
       }), { status: 200, headers: { 'content-type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
     const adapter = new WebDshAdapter({ provider: 'p', model: 'm' });
 
     await expect(adapter.createSession('/repo')).resolves.toBe('s1');
     await expect(adapter.deleteSession('s1')).resolves.toEqual({
-      ok: true, stopped: false, detached: true, dirRemoved: true, projRemoved: true, workspaceRemoved: true,
+      ok: true, trashed: true,
     });
+    await expect(adapter.purgeSession('s1')).resolves.toEqual({ ok: true, purged: true });
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://127.0.0.1:3080/api/session.create', expect.objectContaining({
       method: 'POST',
     }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://127.0.0.1:3080/__chameleon/session/delete', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 's1' }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://127.0.0.1:3080/__chameleon/session/purge', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ sessionId: 's1' }),
     }));

@@ -258,7 +258,9 @@ shell 调用仍按高风险处理。等待仅暂停
 dsh plugin --profile web add dsh-lark-bot@<version>
 ```
 
-Web profile 只启用会话管理，不会启动第二个飞书桥接。完整生命周期说明见 [`docs/SESSION_MANAGEMENT.md`](SESSION_MANAGEMENT.md)。
+Web profile 只启用会话管理，不会启动第二个飞书桥接。飞书侧可使用 `/sessions` 列表、`/use <alias>`
+切换、`/delete <alias>` 移入回收站、`/purge <alias>` 永久清理；删除和永久清理均要求在确认卡上再次确认。
+完整生命周期说明见 [`docs/SESSION_MANAGEMENT.md`](SESSION_MANAGEMENT.md)。
 
 ## 7. 安全网守护（默认安装）· Safety-net guardian
 

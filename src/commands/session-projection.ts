@@ -33,6 +33,7 @@ interface PendingDeletion {
   alias: string;
   sessionId: string;
   session: import('../session/projection-protocol.js').DshSessionSummary;
+  mode: 'trash' | 'purge';
   actorId: string;
   scope: string;
   workspaceCwd: string;
@@ -110,7 +111,7 @@ export class SessionProjectionController {
     }), this.options(ctx.threadId));
   }
 
-  async handleAliasCommand(command: 'sessions' | 'use' | 'delete', args: string, ctx: CommandContext): Promise<void> {
+  async handleAliasCommand(command: 'sessions' | 'use' | 'delete' | 'purge', args: string, ctx: CommandContext): Promise<void> {
     if (!this.deps.aliases) throw new Error('session aliases are not configured');
     const actorId = this.requireAuthorized(ctx.scope, ctx.chatId, ctx.chatMode, ctx.senderId);
     const alias = args.trim().split(/\s+/u).filter(Boolean)[0];
@@ -142,8 +143,8 @@ export class SessionProjectionController {
           }
           const session = byId.get(entry.sessionId)!;
           const title = session.title?.trim() || '未命名会话';
-          const statusZh = session.running ? '运行中' : '空闲';
-          const statusEn = session.running ? 'running' : 'idle';
+          const statusZh = session.trashed ? '回收站' : session.running ? '运行中' : '空闲';
+          const statusEn = session.trashed ? 'recycle bin' : session.running ? 'running' : 'idle';
           zh.push(`- \`${entry.alias}\` · **${title}** · ${statusZh} · \`${entry.sessionId}\``);
           en.push(`- \`${entry.alias}\` · **${title}** · ${statusEn} · \`${entry.sessionId}\``);
         }
@@ -162,6 +163,12 @@ export class SessionProjectionController {
       await this.deps.aliases.removeAlias(alias!);
       throw new Error(`session for alias ${alias} was already deleted`);
     }
+    if (command === 'use' && session.trashed) {
+      throw new Error(`alias ${alias} is in the recycle bin; restore it from the DSH Web session manager first`);
+    }
+    if (command === 'delete' && session.trashed) {
+      throw new Error(`alias ${alias} is already in the recycle bin; use /purge ${alias} for permanent deletion`);
+    }
     const workspaceCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
     if (command === 'use') {
       if (session.cwd && session.cwd !== workspaceCwd) {
@@ -178,6 +185,7 @@ export class SessionProjectionController {
     await this.prepareDeletion({
       alias: alias!,
       session,
+      mode: command === 'purge' ? 'purge' : 'trash',
       actorId,
       scope: ctx.scope,
       workspaceCwd,
@@ -315,18 +323,22 @@ export class SessionProjectionController {
       }
       if (action !== 'delete-confirm') throw new Error('unknown session deletion action');
       if (this.deps.aliases.getSessionId(pending.alias) !== pending.sessionId) {
-        throw new Error('alias mapping changed; send /delete again');
+        throw new Error(`alias mapping changed; send /${pending.mode} again`);
       }
       const current = (await this.deps.bridge.listSessions()).find((item) => item.sessionId === pending.sessionId);
       if (!current) {
         await this.deps.aliases.removeAlias(pending.alias);
         throw new Error(`session for alias ${pending.alias} was already deleted`);
       }
-      await this.deps.bridge.deleteSession(pending.sessionId);
+      if (pending.mode === 'purge') await this.deps.bridge.purgeSession(pending.sessionId);
+      else await this.deps.bridge.deleteSession(pending.sessionId);
       this.deps.sessions.clearSessionId(pending.sessionId);
       await this.deps.store.removeSession(pending.sessionId);
-      await this.deps.aliases.removeAlias(pending.alias);
-      return { toast: { type: 'success', content: `Deleted session ${pending.alias}` } };
+      if (pending.mode === 'purge') {
+        await this.deps.aliases.removeAlias(pending.alias);
+        return { toast: { type: 'success', content: `Permanently deleted session ${pending.alias}` } };
+      }
+      return { toast: { type: 'success', content: `Moved session ${pending.alias} to the recycle bin` } };
     } catch (error) {
       return { toast: { type: 'error', content: error instanceof Error ? error.message : String(error) } };
     }
@@ -381,6 +393,7 @@ export class SessionProjectionController {
   private async prepareDeletion(input: {
     alias: string;
     session: import('../session/projection-protocol.js').DshSessionSummary;
+    mode: 'trash' | 'purge';
     actorId: string;
     scope: string;
     workspaceCwd: string;
@@ -403,6 +416,7 @@ export class SessionProjectionController {
       alias: input.alias,
       sessionId: input.session.sessionId,
       session: input.session,
+      mode: input.mode,
       actorId: input.actorId,
       scope: input.scope,
       workspaceCwd: input.workspaceCwd,
@@ -415,6 +429,7 @@ export class SessionProjectionController {
     await this.deps.channel.sendCard(input.chatId, renderSessionDeleteConfirmCard({
       alias: input.alias,
       session: input.session,
+      mode: input.mode,
       nonce,
       scope: input.scope,
       workspaceCwd: input.workspaceCwd,

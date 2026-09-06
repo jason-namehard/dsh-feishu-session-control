@@ -1239,9 +1239,8 @@ export function apply(ctx) {
       },
     }))
 
-    // Compatibility endpoint for the Feishu web adapter. It keeps the
-    // permanent-delete capability inside this unified bundle, so the profile
-    // no longer needs a separate session-delete plugin.
+    // Compatibility endpoint for the Feishu web adapter: normal deletion is
+    // recoverable and therefore only moves the session into the recycle bin.
     disposers.push(webServer.register({
       kind: 'exact',
       path: '/__chameleon/session/delete',
@@ -1250,9 +1249,26 @@ export function apply(ctx) {
           const body = await readJsonBody(req)
           const sid = body && typeof body.sessionId === 'string' ? body.sessionId : null
           if (!sid) return json(res, { ok: false, error: 'missing sessionId' }, 400)
+          json(res, { sessionId: sid, ...(await deleteOne(sid)) })
+        } catch (e) {
+          json(res, { ok: false, error: String((e && e.message) || e) }, (e && e.status) ? e.status : 500)
+        }
+      },
+    }))
+
+    // Direct permanent deletion for the Feishu /purge command. The session is
+    // first recorded in the recycle bin so purgeFromTrash can apply its
+    // durable tombstone and path-safety checks in one operation.
+    disposers.push(webServer.register({
+      kind: 'exact',
+      path: '/__chameleon/session/purge',
+      handler: async (req, res) => {
+        try {
+          const body = await readJsonBody(req)
+          const sid = body && typeof body.sessionId === 'string' ? body.sessionId : null
+          if (!sid) return json(res, { ok: false, error: 'missing sessionId' }, 400)
           await deleteOne(sid)
-          const result = await purgeFromTrash(sid)
-          json(res, { ok: true, sessionId: sid, ...result })
+          json(res, { sessionId: sid, ...(await purgeFromTrash(sid)) })
         } catch (e) {
           json(res, { ok: false, error: String((e && e.message) || e) }, (e && e.status) ? e.status : 500)
         }

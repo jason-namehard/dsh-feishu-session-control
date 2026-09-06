@@ -7,7 +7,7 @@
 一个 `dsh-lark-bot` 包现在包含：
 
 - 飞书/Lark WebSocket 远程桥接；
-- `MMDD-N` 稳定 session 别名、`/sessions`、`/use`、`/delete`、`/new`；
+- `MMDD-N` 稳定 session 别名、`/sessions`、`/use`、`/delete`、`/purge`、`/new`；
 - DSH Web 会话管理面板；
 - Web 端归档、恢复、回收站、永久清理、详情、收藏和跨工作区移动；
 - `/__chameleon/session/delete` 兼容路由，供飞书 Web adapter 使用；
@@ -45,9 +45,9 @@ Web 管理器采用三层生命周期：
 - **删除**：进入回收站，可恢复；
 - **永久清理**：从回收站彻底移除，不可恢复。
 
-当前飞书 `/delete <MMDD-N>` 保留上一阶段的安全确认后永久删除行为；它与 Web
-回收站的“删除”语义不同。是否将飞书 `/delete` 调整为进入回收站，并新增
-`/purge <MMDD-N>` 作为永久清理命令，待项目维护者确认后再改变命令契约。
+当前飞书 `/delete <MMDD-N>` 在二次确认后移入回收站，别名保留，便于后续恢复或永久清理。
+`/purge <MMDD-N>` 在二次确认后永久清理，该操作不可恢复。Web 端仍提供回收站中的恢复、批量
+操作和永久清理能力。
 
 ## Web adapter
 

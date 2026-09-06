@@ -103,7 +103,8 @@ dsh plugin --profile dsh-lark remove dsh-lark-bot
 | `/session`、`/session bind <sessionId>`、`/session current` | 浏览当前 workspace 的 DSH session，经披露确认后显式绑定 / 查看当前绑定（仅 `web` adapter） |
 | `/sessions` | 列出全部普通 DSH session、别名、名称、状态和 native ID（仅 `web` adapter） |
 | `/use <alias>` | 按 `MMDD-N` 别名打开会话绑定确认卡（仅 `web` adapter） |
-| `/delete <alias>` | 按 `MMDD-N` 别名打开永久删除确认卡；确认后删除 session 及其 DSH 记录（仅 `web` adapter） |
+| `/delete <alias>` | 按 `MMDD-N` 别名将 session 移入可恢复回收站（需确认；仅 `web` adapter） |
+| `/purge <alias>` | 按 `MMDD-N` 别名永久清理 session 及其 DSH 记录（需确认；仅 `web` adapter） |
 | `/stop` | 终止当前任务 |
 | `/timeout [N\|off\|default]` | 查看或设置运行超时 |
 | `/concurrency [N\|default]` | 查看或设置当前 scope 的并行任务数 |
@@ -383,7 +384,8 @@ dsh-lark-bot guardian uninstall
   会中断原工作区仍在运行的任务，但不删除数据，切回会续接。`/new` / `/reset` 只清空当前工作区。
 - `.session_aliases.json` 位于默认工作区根目录，只保存 `MMDD-N → native sessionId`。别名按本地日历日期递增；
   删除会话不会重排其他编号，新会话使用该日期当前存在的下一个编号。`/delete` 的确认卡只允许原操作者
-  在十分钟内点击一次；确认后 DSH 删除插件先处理远端日志与存储，bridge 再清理本地 binding 和别名。
+  在十分钟内点击一次；确认后会话进入回收站，别名保留。`/purge` 需要单独确认，永久清理完成后才移除
+  别名；Web 会话管理器仍提供回收站恢复和批量清理。
 - 同一 scope 默认允许 2 个任务并行（`/concurrency` 或 `DSH_LARK_SCOPE_CONCURRENCY` 调整，
   1 为严格串行）；并行 run 各持独立 dsh session 与 runId。SDK runtime 以 `scope + workspace`
   为停止域，并发 session 也彼此隔离；卡片停止只终止对应 run，`/stop` 仍终止当前 scope 内全部

@@ -12,7 +12,8 @@ import {
   textContent,
   type DshSessionEvent,
   type DshSessionSummary,
-  type SessionDeleteResult,
+  type SessionPurgeResult,
+  type SessionTrashResult,
   type SessionProjectionSource,
 } from './projection-protocol.js';
 import type {
@@ -108,7 +109,7 @@ export class SessionProjectionBridge {
 
   async eligibleSessions(workspaceCwd: string): Promise<DshSessionSummary[]> {
     return (await this.listSessions())
-      .filter((session) => session.cwd === workspaceCwd && session.origin !== 'subagent')
+      .filter((session) => session.cwd === workspaceCwd && session.origin !== 'subagent' && session.trashed !== true)
       .sort((left, right) => right.updatedAt - left.updatedAt);
   }
 
@@ -123,9 +124,14 @@ export class SessionProjectionBridge {
     return this.deps.source.createSession(workspaceCwd);
   }
 
-  async deleteSession(sessionId: string): Promise<SessionDeleteResult> {
+  async deleteSession(sessionId: string): Promise<SessionTrashResult> {
     if (!this.deps.source.deleteSession) throw new Error('session deletion is unavailable for this adapter');
     return this.deps.source.deleteSession(sessionId);
+  }
+
+  async purgeSession(sessionId: string): Promise<SessionPurgeResult> {
+    if (!this.deps.source.purgeSession) throw new Error('permanent session deletion is unavailable for this adapter');
+    return this.deps.source.purgeSession(sessionId);
   }
 
   async prepare(

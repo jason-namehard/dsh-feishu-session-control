@@ -155,9 +155,9 @@ answerer + `tools/pre-execute` 强制门禁，经 bridge `/approval` 提供逐�
 - 输入走 `POST /api/session.create` / `session.prompt`（本地 dsh web，默认
   `http://127.0.0.1:3080`，`DSH_LARK_WEB_URL` 可改），输出走 `/api/events.mux` WebSocket
   （SSE 会 426），翻译为既有 `AgentEvent` 词汇。
-- `/new` 通过 `session.create` 创建 native session；会话别名命令使用
-  `__chameleon/session/delete` 本机路由调用已安装的 `workbench_session_delete` 插件，
-  不对公网开放删除入口。
+- `/new` 通过 `session.create` 创建 native session；`/delete <alias>` 通过
+  `/__chameleon/session/delete` 将会话移入可恢复回收站，`/purge <alias>` 通过
+  `/__chameleon/session/purge` 永久清理回收站中的会话；两者都是本机路由，不对公网开放。
 - **网页端 agent 成为唯一写者**：不再 spawn 自己的 agent runtime，多写者（bridge 子进程、
   守护重启、陈旧 live session 双写）导致的 `corrupt session log: seq gap` 从根上消失，
   旧会话天然可续接。

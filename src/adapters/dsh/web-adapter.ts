@@ -8,7 +8,10 @@ import type {
 } from '../types.js';
 import { EventChannel } from './event-channel.js';
 import { translateSessionEvent } from './sdk-translate.js';
-import type { SessionDeleteResult } from '../../session/projection-protocol.js';
+import type {
+  SessionPurgeResult,
+  SessionTrashResult,
+} from '../../session/projection-protocol.js';
 
 export interface WebAdapterOptions {
   /** Base URL of the local dsh web agent (default http://127.0.0.1:3080). */
@@ -294,7 +297,7 @@ export class WebDshAdapter implements AgentAdapter {
     return response.result.value.sessionId;
   }
 
-  async deleteSession(sessionId: string): Promise<SessionDeleteResult> {
+  async deleteSession(sessionId: string): Promise<SessionTrashResult> {
     const response = await fetch(`${this.baseUrl}/__chameleon/session/delete`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -313,7 +316,50 @@ export class WebDshAdapter implements AgentAdapter {
         : `session deletion failed: HTTP ${response.status}`;
       throw new Error(message);
     }
-    return body as SessionDeleteResult;
+    return body as SessionTrashResult;
+  }
+
+  async purgeSession(sessionId: string): Promise<SessionPurgeResult> {
+    const response = await fetch(`${this.baseUrl}/__chameleon/session/purge`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      body = undefined;
+    }
+    if (!response.ok || !body || typeof body !== 'object' || (body as { ok?: boolean }).ok !== true) {
+      const message = body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string'
+        ? (body as { error: string }).error
+        : `permanent session deletion failed: HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return body as SessionPurgeResult;
+  }
+
+  async listTrashedSessionIds(): Promise<Set<string>> {
+    const response = await fetch(`${this.baseUrl}/archived-sessions/trash/list`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(30_000),
+    });
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      body = undefined;
+    }
+    if (!response.ok || !body || typeof body !== 'object' || !Array.isArray((body as { items?: unknown }).items)) {
+      throw new Error(`session recycle-bin listing failed: HTTP ${response.status}`);
+    }
+    return new Set(
+      (body as { items: Array<{ sessionId?: unknown }> }).items
+        .map((item) => item && typeof item.sessionId === 'string' ? item.sessionId : undefined)
+        .filter((sessionId): sessionId is string => sessionId !== undefined),
+    );
   }
 
   async openMux(): Promise<WebSocket> {

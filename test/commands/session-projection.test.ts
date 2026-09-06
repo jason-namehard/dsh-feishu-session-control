@@ -23,13 +23,15 @@ async function fixture(
   const aliases = new SessionAliasManager(join(root, 'aliases.json'), () => new Date(2026, 8, 5));
   await Promise.all([store.load(), sessions.load(), scopes.load(), aliases.load()]);
   const session = { sessionId: 's1', updatedAt: new Date(2026, 8, 5).getTime(), running: false, blank: false, cwd: '/repo', title: 'Release' };
+  let trashed = false;
   let deleted = false;
   const prepared = { session, messages: [{ role: 'user' as const, content: 'secret history', source: 'other-dsh-client' as const }], backfillCount: 1, truncated: false, snapshotSeq: 5 };
   const bridge = {
     eligibleSessions: vi.fn(async () => [session]),
-    listSessions: vi.fn(async () => deleted ? [] : [session]),
+    listSessions: vi.fn(async () => deleted ? [] : [{ ...session, ...(trashed ? { trashed: true } : {}) }]),
     createSession: vi.fn(async () => 's2'),
-    deleteSession: vi.fn(async () => { deleted = true; return { stopped: false, detached: false, dirRemoved: true, projRemoved: true, workspaceRemoved: true }; }),
+    deleteSession: vi.fn(async () => { trashed = true; return { ok: true, trashed: true }; }),
+    purgeSession: vi.fn(async () => { deleted = true; return { ok: true, purged: true }; }),
     prepare: vi.fn(async () => prepared),
     bindConfirmed: vi.fn(async (input: Parameters<SessionProjectionBridge['bindConfirmed']>[0]) => {
       const result = await store.bindExclusive({
@@ -110,7 +112,7 @@ describe('/session explicit binding workflow', () => {
     expect(f.sessions.resumeFor('chat-a', '/repo')).toBe('s2');
   });
 
-  it('requires confirmation and cleans the alias after permanent deletion', async () => {
+  it('moves a session to the recycle bin, then permanently deletes it with /purge', async () => {
     const f = await fixture();
     f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
     await f.aliases.registerSession('s1');
@@ -129,9 +131,25 @@ describe('/session explicit binding workflow', () => {
     });
     expect(result.toast.type).toBe('success');
     expect(f.bridge.deleteSession).toHaveBeenCalledWith('s1');
-    expect(f.aliases.getSessionId('0905-1')).toBeUndefined();
+    expect(f.aliases.getSessionId('0905-1')).toBe('s1');
     expect(f.sessions.resumeFor('chat-a', '/repo')).toBeUndefined();
     expect(f.store.list()).toHaveLength(0);
+
+    await f.controller.handleAliasCommand('purge', '0905-1', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+    const purgeCard = JSON.stringify(f.sendCard.mock.calls.at(-1)?.[1]);
+    const purgeNonce = [...purgeCard.matchAll(/"nonce":"([^"]+)"/gu)][0]?.[1];
+    expect(purgeCard).toContain('0905-1');
+    expect(purgeCard).toContain('permanent');
+
+    const purgeResult = await f.controller.handleAction({
+      value: { cmd: 'session-alias', action: 'delete-confirm', alias: '0905-1', nonce: purgeNonce, scope: 'chat-a', workspaceCwd: '/repo', actorId: 'user-a', mode: 'purge' },
+      operatorId: 'user-a', chatId: 'chat-a', threadId: undefined, currentScope: 'chat-a',
+    });
+    expect(purgeResult.toast.type).toBe('success');
+    expect(f.bridge.purgeSession).toHaveBeenCalledWith('s1');
+    expect(f.aliases.getSessionId('0905-1')).toBeUndefined();
   });
 
   it('requires profile admin for group/topic but permits the owner of a member scope', async () => {

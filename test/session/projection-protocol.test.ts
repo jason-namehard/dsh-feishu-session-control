@@ -22,9 +22,10 @@ describe('WebSessionProjectionSource', () => {
       rpc: async <T>(method: string, payload: unknown, rpcId?: string): Promise<T> =>
         rpc(method, payload, rpcId) as Promise<T>,
       openMux: vi.fn(),
+      listTrashedSessionIds: vi.fn(async () => new Set(['s1'])),
     });
     expect(await source.listSessions()).toEqual([
-      expect.objectContaining({ sessionId: 's1', title: 'Release work' }),
+      expect.objectContaining({ sessionId: 's1', title: 'Release work', trashed: true }),
       expect.objectContaining({ sessionId: 'sub', origin: 'subagent' }),
     ]);
     expect((await source.history('s1', { beforeSeq: 4, maxMessages: 20 })).events[0]?.seq).toBe(3);

@@ -8,7 +8,8 @@ export interface CommandDefinition {
 export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { names: ['/sessions'], area: 'session', zh: 'list DSH sessions and aliases', en: 'list DSH sessions and their aliases' },
   { names: ['/use'], area: 'session', zh: '`<MMDD-N>` - switch to a named session', en: '`<MMDD-N>` - switch to a named DSH session' },
-  { names: ['/delete'], area: 'session', zh: '`<MMDD-N>` - delete a named session after confirmation', en: '`<MMDD-N>` - permanently delete a named DSH session after confirmation' },
+  { names: ['/delete'], area: 'session', zh: '`<MMDD-N>` - move a named session to the recycle bin after confirmation', en: '`<MMDD-N>` - move a named DSH session to the recycle bin after confirmation' },
+  { names: ['/purge'], area: 'session', zh: '`<MMDD-N>` - permanently delete a named session after confirmation', en: '`<MMDD-N>` - permanently delete a named DSH session after confirmation' },
   { names: ['/new', '/reset'], area: 'session', zh: '开始新会话', en: 'start a new session' },
   { names: ['/newg'], area: 'session', zh: '`<群名>` — 新建群聊并开始独立会话', en: '`<name>` — create a group and start an independent session' },
   { names: ['/cd'], area: 'workspace', zh: '`<path>` — 切换到该目录的独立会话', en: '`<path>` — switch to that directory’s independent session' },

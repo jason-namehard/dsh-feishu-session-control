@@ -5,6 +5,7 @@ import { localizedCard, type CardLocale } from './i18n.js';
 export function renderSessionDeleteConfirmCard(input: {
   alias: string;
   session: DshSessionSummary;
+  mode: 'trash' | 'purge';
   nonce: string;
   scope: string;
   workspaceCwd: string;
@@ -16,6 +17,7 @@ export function renderSessionDeleteConfirmCard(input: {
     const status = input.session.running
       ? (zh ? '运行中' : 'Running')
       : (zh ? '已停止' : 'Idle');
+    const permanent = input.mode === 'purge';
     const value = {
       cmd: 'session-alias',
       alias: input.alias,
@@ -23,13 +25,14 @@ export function renderSessionDeleteConfirmCard(input: {
       scope: input.scope,
       workspaceCwd: input.workspaceCwd,
       actorId: input.actorId,
+      mode: input.mode,
     };
     return {
       elements: [
         {
           tag: 'markdown',
           content: [
-            `**${zh ? '确认删除会话' : 'Confirm session deletion'}**`,
+            `**${zh ? (permanent ? '确认永久删除会话' : '确认移入回收站') : (permanent ? 'Confirm permanent deletion' : 'Confirm move to recycle bin')}**`,
             '',
             `${zh ? '别名' : 'Alias'}: **\`${safe(input.alias, 128)}\`**`,
             `${zh ? '名称' : 'Name'}: ${safe(title, 256)}`,
@@ -38,11 +41,15 @@ export function renderSessionDeleteConfirmCard(input: {
             '',
             input.session.running
               ? (zh
-                ? '⚠️ 该会话正在运行。删除会先停止任务，并永久移除会话记录，无法恢复。'
-                : '⚠️ This session is running. Deletion stops its task and permanently removes its records.')
+                ? (permanent
+                  ? '⚠️ 该会话正在运行。任务会先停止，然后永久移除会话记录。'
+                  : '⚠️ 该会话正在运行。任务会先停止，然后移入可恢复的回收站。')
+                : (permanent
+                  ? '⚠️ 会话记录将被永久移除，且无法恢复。'
+                  : 'ℹ️ 会话将移入回收站，可从 DSH Web 会话管理器恢复。'))
               : (zh
-                ? '⚠️ 删除会永久移除会话记录，且无法恢复。'
-                : '⚠️ Deletion permanently removes the session records and cannot be undone.'),
+                ? (permanent ? '⚠️ 会话记录将被永久移除，且无法恢复。' : 'ℹ️ 会话将移入回收站，可从 DSH Web 会话管理器恢复。')
+                : (permanent ? '⚠️ The session records will be permanently removed and cannot be recovered.' : 'ℹ️ The session will move to the recycle bin and can be restored from the DSH Web session manager.')),
           ].join('\n'),
         },
         {
@@ -55,7 +62,7 @@ export function renderSessionDeleteConfirmCard(input: {
               elements: [{
                 tag: 'button',
                 type: 'danger',
-                text: { tag: 'plain_text', content: zh ? '确认删除' : 'Delete permanently' },
+                text: { tag: 'plain_text', content: zh ? (permanent ? '永久删除' : '移入回收站') : (permanent ? 'Delete permanently' : 'Move to recycle bin') },
                 value: { ...value, action: 'delete-confirm' },
               }],
             },

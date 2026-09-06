@@ -8,6 +8,7 @@ import { parse as parseYaml } from 'yaml';
 const root = resolve(import.meta.dirname, '..');
 const manifestPath = resolve(root, 'dsh-plugin.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 const manifests = await findManifests(root);
 assert(manifests.length === 1 && manifests[0] === 'dsh-plugin.json',
@@ -61,7 +62,10 @@ for (const [coordinate, snapshot] of Object.entries(lock.packages ?? {})) {
 
 for (const location of ['local', 'remote']) {
   const name = `host-descriptor.${location}.json`;
-  const descriptorBytes = await readFile(resolve(root, 'docs/conformance', name));
+  const descriptorBytes = Buffer.from(
+    (await readFile(resolve(root, 'docs/conformance', name))).toString('utf8').replaceAll('\r\n', '\n'),
+    'utf8',
+  );
   const descriptor = JSON.parse(descriptorBytes.toString('utf8'));
   assert(descriptor.$schema === 'urn:dsh-tui:host-descriptor:0.15', `${name}: wrong schema`);
   assert(descriptor.trustLevel === 'trusted-in-process', `${name}: wrong trust level`);
@@ -86,19 +90,19 @@ for (const location of ['local', 'remote']) {
 
 const packRoot = await mkdtemp(join(tmpdir(), 'dsh-lark-tui-pack-'));
 try {
-  const packed = JSON.parse(execFileSync('npm', [
+  const packed = parseJsonOutput(execFileSync(npmCommand, [
     'pack', '--ignore-scripts', '--json', '--pack-destination', packRoot,
-  ], { cwd: root, encoding: 'utf8' }));
+  ], { cwd: root, encoding: 'utf8', shell: process.platform === 'win32' }));
   const tarball = resolve(packRoot, packed[0]?.filename ?? '');
   assert(relative(packRoot, tarball) && !relative(packRoot, tarball).startsWith('..'),
     'npm pack did not return a package inside the temporary directory');
   const consumer = resolve(packRoot, 'consumer');
   await mkdir(consumer);
   await writeFile(resolve(consumer, 'package.json'), '{"name":"dsh-lark-tui-consumer","private":true}\n');
-  execFileSync('npm', [
+  execFileSync(npmCommand, [
     'install', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false',
     '--legacy-peer-deps', '--omit=dev', tarball,
-  ], { cwd: consumer, stdio: 'pipe' });
+  ], { cwd: consumer, stdio: 'pipe', shell: process.platform === 'win32' });
   const installed = await readFile(resolve(consumer, 'node_modules', packageJson.name, artifact.path));
   const installedDigest = `sha256:${createHash('sha256').update(installed).digest('hex')}`;
   assert(installedDigest === actualArtifactDigest,
@@ -108,6 +112,12 @@ try {
 }
 
 process.stdout.write(`[tui-admission] manifest, packed/installed artifact, full lock integrity, descriptors and claims verified (${actualArtifactDigest})\n`);
+
+function parseJsonOutput(output) {
+  const text = String(output).trim();
+  const jsonStart = Math.max(text.lastIndexOf('\n['), text.lastIndexOf('\n{'));
+  return JSON.parse(jsonStart >= 0 ? text.slice(jsonStart + 1) : text);
+}
 
 async function findManifests(directory, prefix = '') {
   const found = [];
