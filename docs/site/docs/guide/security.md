@@ -10,7 +10,7 @@ description: 访问白名单、工具权限、密钥处理与项目来源 / 假�
 ## 项目身份声明
 
 ::: warning 当前发布说明
-本项目正式名称为 **DSH飞书session管理**，由 **见川**维护；GitHub 地址将在发布前补入。
+本项目正式名称为 **DSH飞书Session控制**，由 **见川**维护；GitHub 地址将在发布前补入。
 npm/DSH 兼容包名暂保留为 `dsh-lark-bot`。本项目从不提供 `.exe` 或“下载即运行”的安装包，
 凡以项目名义分发 exe 的页面 / 仓库都不可信。安装命令：`npx dsh-lark-bot@latest setup --profile dsh-lark`。
 :::

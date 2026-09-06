@@ -1,7 +1,7 @@
 {
   "name": "dsh-lark-bot",
   "version": "0.19.16",
-  "description": "把 DeepSeek Harness (dsh) 装进飞书/Lark 的 bot，扫码即用：dsh Web 可视化设置、流式卡片、项目工作区、并行任务、多角色 Agent、安全网守护。| Bridge DeepSeek Harness into Feishu/Lark with visual dsh Web settings, streaming cards, workspaces, parallel tasks, roles and a safety-net guardian.",
+  "description": "DSH飞书Session控制：把 DeepSeek Harness (dsh) 装进飞书/Lark，统一远程 session 控制、别名、回收站、永久清理、Web 管理和 Guardian。| DSH Feishu Session Control: a unified Feishu/Lark bridge for remote session control, aliases, recycle-bin lifecycle, Web management and the Guardian.",
   "author": "见川",
   "type": "module",
   "packageManager": "pnpm@10.33.0",

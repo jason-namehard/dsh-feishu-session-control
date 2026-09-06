@@ -2,7 +2,7 @@
 
 ## Project maintenance
 
-DSH飞书session管理 is maintained by **见川**. This repository is a new integration and refactoring project;
+DSH飞书Session控制 is maintained by **见川**. This repository is a new integration and refactoring project;
 it is not the upstream `PlutoKeating/dsh-lark-bot` repository and does not represent its author.
 
 ## Upstream and third-party sources

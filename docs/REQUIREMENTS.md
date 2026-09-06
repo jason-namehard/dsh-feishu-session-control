@@ -1,7 +1,7 @@
 # 项目诉求与需求文档 · Project Requirements
 
 > **身份说明**：本文档保留了上游 `dsh-lark-bot` 的历史需求与决策，用于代码来源追溯。
-> 当前项目正式名称是 **DSH飞书session管理**，维护者是 **见川**；当前项目身份、发布边界
+> 当前项目正式名称是 **DSH飞书Session控制**，维护者是 **见川**；当前项目身份、发布边界
 > 与许可证说明以 `docs/PROJECT_IDENTITY.md` 和 `NOTICE.md` 为准。
 
 > 本文档是 **dsh-lark-bot** 项目的历史需求档案，完整记录上游项目发起人 PlutoKeating 的项目诉求、产出预期、规范要求与技术决策。

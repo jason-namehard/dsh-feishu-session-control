@@ -1,4 +1,4 @@
-<h1 align="center">DSH Feishu Session Manager</h1>
+<h1 align="center">DSH Feishu Session Control</h1>
 
 <p align="center">🌏 <a href="README.md">中文</a> · 📦 <a href="docs/PROJECT_IDENTITY.md">Project identity and provenance</a></p>
 
@@ -16,7 +16,7 @@
 
 ## Project Overview
 
-The project name is **DSH Feishu Session Manager**. The npm/DSH compatibility package name remains `dsh-lark-bot` so existing profiles keep working.
+The project name is **DSH Feishu Session Control**. The npm/DSH compatibility package name remains `dsh-lark-bot` so existing profiles keep working.
 
 Make DeepSeek Harness a member of your Feishu/Lark and drive your local coding agent directly from phone, group, or thread. It uses a Feishu WebSocket long connection, so you need **no public IP, domain, server, or NAT-tunnelling**; Linux / macOS / Windows, Node.js ≥ 22.
 

@@ -1,4 +1,4 @@
-<h1 align="center">DSH飞书session管理</h1>
+<h1 align="center">DSH飞书Session控制</h1>
 
 <p align="center">🌏 <a href="README_EN.md">English</a> · 📦 <a href="docs/PROJECT_IDENTITY.md">项目身份与来源说明</a></p>
 
@@ -16,7 +16,7 @@
 
 ## 项目简介
 
-本项目正式名称为 **DSH飞书session管理**；npm/DSH 兼容包名暂保留为 `dsh-lark-bot`，以避免破坏现有 profile。
+本项目正式名称为 **DSH飞书Session控制**；npm/DSH 兼容包名暂保留为 `dsh-lark-bot`，以避免破坏现有 profile。
 
 让 DeepSeek Harness 成为你飞书里的一员，在手机、群聊、话题里直接指挥本机 coding agent。
 走飞书 WebSocket 长连接，**不需要公网 IP、域名、服务器或内网穿透**；Linux / macOS / Windows 通用，Node.js ≥ 22。

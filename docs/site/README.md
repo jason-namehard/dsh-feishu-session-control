@@ -1,6 +1,6 @@
-# dsh-lark-bot landing / docs site
+# DSH Feishu Session Control landing / docs site
 
-基于 **VitePress** 的官方落地页 + 使用文档站，部署到 Cloudflare Pages（项目名 `dsh-lark-bot`），由 `.github/workflows/cf-pages.yml` 在 `main` 分支的 `docs/**` 变更时自动构建并部署。
+基于 **VitePress** 的项目落地页 + 使用文档站，部署到 Cloudflare Pages；由 `.github/workflows/cf-pages.yml` 在 `main` 分支的 `docs/**` 变更时自动构建并部署。
 
 > 参考 Kimi Code / MiMoCode 官方 docs 站的「Vite 系文档框架 + 侧边栏分目录 + 明暗主题 + 响应式移动端」风格。
 

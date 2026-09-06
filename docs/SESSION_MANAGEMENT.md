@@ -1,6 +1,6 @@
-﻿# DSH飞书session管理
+# DSH飞书Session控制
 
-本项目正式名称为 **DSH飞书session管理**，npm/DSH 兼容包名仍为 `dsh-lark-bot`。
+本项目正式名称为 **DSH飞书Session控制**，npm/DSH 兼容包名仍为 `dsh-lark-bot`。
 
 ## 单包整合
 

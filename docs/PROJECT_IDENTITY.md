@@ -2,9 +2,11 @@
 
 ## 当前项目
 
-- **正式名称**：DSH飞书session管理
+- **正式名称**：DSH飞书Session控制
+- **英文名称**：DSH Feishu Session Control
 - **维护者**：见川
-- **本地项目目录**：`DSH-feishu-session`
+- **本地项目目录**：`dsh-feishu-session-control`
+- **GitHub 仓库建议名**：`dsh-feishu-session-control`
 - **GitHub 仓库**：待维护者确认最终的 GitHub 账号与仓库名后补入
 
 本项目是一个独立发布的整合项目，目标是把 DeepSeek Harness、飞书/Lark WebSocket
