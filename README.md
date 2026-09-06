@@ -29,13 +29,13 @@
 
 ```bash
 npx dsh-lark-bot@latest setup --profile dsh-lark   # ① 一键安装 dsh-lark + web + Guardian
-dsh --profile dsh-lark                              # ② 启动飞书桥接
-dsh --profile web                                   # ③ 按需启动 Web 会话管理面板
+dsh web                                             # ② 在同一个前台进程启动 DSH Web + 飞书桥接
 ```
 
-③ 首次启动终端打印二维码 → 飞书 App 扫码创建或选择 PersonalAgent 应用 → 绑定后直接私聊发消息；群聊 / 话题默认 `@bot`。
+首次启动终端打印二维码 → 飞书 App 扫码创建或选择 PersonalAgent 应用 → 绑定后直接私聊发消息；群聊 / 话题默认 `@bot`。
+不要同时启动 `dsh --profile dsh-lark`，否则会建立第二条飞书长连接。
 
-- **已有应用**可跳过扫码：`DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu dsh --profile dsh-lark`。
+- **已有应用**可跳过扫码：`DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu dsh web`。
 - **升级**：`npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes`。
 
 > **不用碰命令行**：管理员直接在飞书发 `/upgrade` 即可。
@@ -100,7 +100,7 @@ dsh --profile web                                   # ③ 按需启动 Web 会�
 ## 常见问题
 
 **Q: DeepSeek Harness 怎么接入飞书？**
-**A:** 装好 Node ≥ 22 与 dsh（已配 `DEEPSEEK_API_KEY`）后，执行 `npx dsh-lark-bot@latest setup --profile dsh-lark`，再 `dsh --profile dsh-lark` 扫码绑定即可；私聊直接发消息，群聊 / 话题默认 `@bot`。
+**A:** 装好 Node ≥ 22 与 dsh（已配 `DEEPSEEK_API_KEY`）后，执行 `npx dsh-lark-bot@latest setup --profile dsh-lark`，再 `dsh web` 扫码绑定即可；私聊直接发消息，群聊 / 话题默认 `@bot`。
 
 **Q: 需要公网 IP、域名或服务器吗？**
 **A:** 不需要。飞书走 WebSocket 长连接（出站），本机在 NAT 后面也能用，免公网服务器、免域名、免内网穿透。
@@ -116,7 +116,7 @@ dsh --profile web                                   # ③ 按需启动 Web 会�
 ## 兼容性
 
 - **DeepSeek Harness（`dsh`）**：已验证 **0.1.0-rc.8**（2026-08-25），经官方 `@deepseek-ai/dsh-sdk-client` / `dsh-acp` 接入；锁定版本与升级政策见 [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)。
-- **运行时**：Node.js ≥ 22.19；**平台**：Linux / macOS / Windows。adapter 默认 `sdk`（原生续跑 / 流式 / 图片块），可切 `acp` / `headless` / `web`。
+- **运行时**：Node.js ≥ 22.19；**平台**：Linux / macOS / Windows。adapter 默认 `web`（复用本机 DSH Web 的 session），可切 `sdk` / `acp` / `headless`。
 
 ## 配置说明
 

@@ -153,7 +153,7 @@
    `AgentAdapter` 抽象保留，agent 后端可换。
    版本更新同样收敛到该单一运行时：profile admin 在飞书用 `/upgrade` 取得 owner-bound 确认卡，
    Guardian 独立 worker 固定目标 npm 版本并复用完整 CLI 升级/重启/doctor 链；`/new` 只做短提醒。
-2. **不再手写 headless JSON 协议**：默认 adapter 换为官方 `@deepseek-ai/dsh-sdk-client`（原生 session + JSON-RPC 协议 + 流式事件）。
+2. **不再手写 headless JSON 协议**：默认 adapter 使用本机 DSH Web session/event mux；需要独立 runtime 时再选择官方 `@deepseek-ai/dsh-sdk-client`（原生 session + JSON-RPC 协议 + 流式事件）。
 3. **审批复用官方 seam**：ACP adapter 使用 `session/request_permission`；默认 SDK / Web 不要求
    JSON-RPC server→client 扩展，而是在对应 runtime 内装配官方 rc.8 `approval/request` waterfall
    answerer，经 bridge `/approval` 回调展示同一张一次性卡。
@@ -169,7 +169,7 @@
 | P0-3 | `src/adapters/dsh/sdk-runtime.ts`：解析 / 确保 `dsh-lark-sdk` SDK runtime profile（bundle `dsh-base` + `dsh-sdk-jsonrpc-server` overlay） | 本地真实握手通过 ✅ |
 | P0-4 | `src/adapters/dsh/sdk-translate.ts`：SDK `session.event`（`assistant/chunk` / `tool/call` / `tool/result` / `assistant/message`）→ `AgentEvent` | 单元测试覆盖 |
 | P0-5 | `src/adapters/dsh/sdk-adapter.ts`：`SdkDshAdapter`（按 cwd 管理 runtime 池 + `session(id)` 原生续跑 + `/stop` 关闭 runtime） | 单元测试 + 真实 runtime 探测 |
-| P0-6 | 接线：`DSH_LARK_ADAPTER=sdk\|acp\|headless`（默认 sdk）、`start.ts` / `doctor` / `.env.example` | typecheck / test / build 通过 ✅ |
+| P0-6 | 接线：`DSH_LARK_ADAPTER=web\|sdk\|acp\|headless`（默认 web）、`start.ts` / `doctor` / `.env.example` | typecheck / test / build 通过 ✅ |
 
 ### 8.3 P0：卡片审批 + 问答卡（复用官方 + 借鉴竞品）
 

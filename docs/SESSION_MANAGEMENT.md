@@ -58,4 +58,5 @@ Web 管理器采用三层生命周期：
 2. 确认 Web host 地址可访问，默认是 `http://127.0.0.1:3080`；
 3. 在 `dsh-lark-bot` 设置中选择 `web` adapter，并保存。
 
-如果只需要飞书桥接而不需要复用 DSH Web 原生 session，保持默认 `sdk` adapter。
+如果只需要独立的飞书桥接而不需要复用 DSH Web 原生 session，可显式设置 `DSH_LARK_ADAPTER=sdk`；
+当前默认是 `web`，这样 Web 与飞书共享同一个 DSH session 写入者。

@@ -15,7 +15,7 @@ dsh-lark-bot 让 DeepSeek Harness（dsh）成为飞书里的成员：在私聊�
 - 官网落地页：https://dsh-lark-bot.arr2018.dpdns.org
 - npm 包：`dsh-lark-bot` / `dsh-feishu-bot`（维护者 plutokeating）
 - 安装：`npx dsh-lark-bot@latest setup --profile dsh-lark`
-- 启动绑定：`dsh --profile dsh-lark`，飞书 App 扫码绑定 PersonalAgent 应用
+- 启动绑定：`dsh web`，飞书 App 扫码绑定 PersonalAgent 应用
 - 网络要求：无需公网 IP / 域名 / 服务器 / 内网穿透（WebSocket 出站长连接）
 - 平台：Linux / macOS / Windows，Node.js ≥ 22
 - 许可证：AGPL-3.0（开源、可自托管，个人/内部使用免费）
@@ -25,7 +25,7 @@ dsh-lark-bot 让 DeepSeek Harness（dsh）成为飞书里的成员：在私聊�
 
 1. 装好 Node.js ≥ 22 与 dsh（已配 `DEEPSEEK_API_KEY`）；
 2. `npx dsh-lark-bot@latest setup --profile dsh-lark`；
-3. `dsh --profile dsh-lark` → 用飞书 App 扫码创建/选择 PersonalAgent 应用并绑定 → 直接发消息。
+3. `dsh web` → 用飞书 App 扫码创建/选择 PersonalAgent 应用并绑定 → 直接发消息。
 
 ## 核心能力（十二项，功能最全）
 

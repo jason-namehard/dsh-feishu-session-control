@@ -17,8 +17,8 @@ description: 环境变量、profile、dsh Web 可视化设置与出站通知渠�
 # DSH_LARK_APP_SECRET=
 DSH_LARK_TENANT=feishu
 
-# agent 后端模式：sdk（默认）| acp | headless | web
-DSH_LARK_ADAPTER=sdk
+# agent 后端模式：web（默认）| sdk | acp | headless
+DSH_LARK_ADAPTER=web
 
 # provider/model 路由
 # DSH_LARK_PROVIDER=provider-id
@@ -42,7 +42,7 @@ Telegram / 企业微信等出站通知渠道**不需要环境变量**——在�
 npx dsh-lark-bot@latest setup --profile dsh-lark
 
 # 启动并按 profile 管理
-dsh --profile dsh-lark
+dsh web
 dsh-lark-bot service install|start|status|logs|restart|stop|uninstall --profile dsh-lark
 ```
 

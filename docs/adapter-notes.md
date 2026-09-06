@@ -9,7 +9,7 @@
 
 - 桥接层的 agent 后端是**抽象接口 `AgentAdapter`**，dsh adapter 已落地在 `src/adapters/dsh/`。
 - **两条官方接入路线均已实测**（2026-08-25 最后验证）：
-  - **SDK client**（`@deepseek-ai/dsh-sdk-client`，默认）：驱动 `dsh-sdk-jsonrpc-server`
+  - **SDK client**（`@deepseek-ai/dsh-sdk-client`，显式回退）：驱动 `dsh-sdk-jsonrpc-server`
     runtime，原生 `session(id)` 续跑；`assistant/chunk` 提供
     **reasoning-delta / text-delta token 级事件**；thinking / tools 实时进入折叠过程卡，聚合后的
     final text 作为独立 Markdown 回答发送；`assistant/message.usage` 提供 input/output/cache usage。
@@ -90,7 +90,7 @@ type AgentEvent =
 | :--- | :--- |
 | `src/adapters/types.ts` | `AgentAdapter` / `AgentRun` / `AgentEvent` / 审批类型契约 |
 | `src/adapters/index.ts` | `buildAgentAdapter(env, prefs)` 按 `DSH_LARK_ADAPTER` 构建 |
-| `src/adapters/dsh/sdk-adapter.ts` | `SdkDshAdapter`（默认）：`DeepSeekHarness` runtime 池 |
+| `src/adapters/dsh/sdk-adapter.ts` | `SdkDshAdapter`（可选）：`DeepSeekHarness` runtime 池 |
 | `src/adapters/dsh/sdk-translate.ts` | SDK `session.event` → `AgentEvent`；图片上传后组成原生 image block |
 | `src/adapters/dsh/sdk-server.ts` | 官方 JSON-RPC server 的最小 `attachment/upload` 扩展 |
 | `src/adapters/dsh/sdk-runtime.ts` | `ensureSdkProfile` / `resolveSdkLaunch`（`dsh-lark-sdk` profile） |
@@ -107,7 +107,7 @@ type AgentEvent =
 
 ## 4. dsh 接入路线 · Integration Routes
 
-### 路线 A：SDK client（默认）
+### 路线 A：SDK client（显式选择）
 
 - 包：`@deepseek-ai/dsh-sdk-client`，源码 [`../reference/deepseek-harness/packages/sdk/client/`](../reference/deepseek-harness/packages/sdk/client/)
 - 高层 API `DeepSeekHarness`：
@@ -164,7 +164,7 @@ answerer + `tools/pre-execute` 强制门禁，经 bridge `/approval` 提供逐�
 - `SessionProjectionBridge` 只为飞书 `/session` 明确确认的 binding 消费 `session.history` 与
   `session/event`；按持久 seq cursor 重连补齐，流式 assistant 原位更新，失败追加。WebUI/TUI
   的 open/resume/activity 不自动切换任何 scope，也不向所有 scope 广播。
-- 回退：`DSH_LARK_ADAPTER=sdk`（默认）一行切回。
+- 回退：`DSH_LARK_ADAPTER=sdk` 一行切换到独立 SDK runtime。
 
 ## 4.1 Runtime profile（自动维护）
 

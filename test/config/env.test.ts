@@ -14,6 +14,7 @@ describe('loadRuntimeEnv', () => {
     expect(env.dshArgs).toEqual(['lib/bin.js', 'cordis.yml']);
     expect(env.provider).toBe('');
     expect(env.model).toBe('');
+    expect(env.adapterMode).toBe('web');
     expect(env.runTimeoutMs).toBe(300_000);
     expect(env.stopGraceMs).toBe(5_000);
     expect(env.groupNoAt).toBe(false);

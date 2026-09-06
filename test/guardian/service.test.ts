@@ -196,6 +196,7 @@ async function makeHarness(
     ensureSdkProfile?: GuardianServiceOptions['ensureSdkProfile'];
     engineDeadMs?: number;
     relaunchReadyTimeoutMs?: number;
+    startupTakeover?: boolean;
     findProcess?: (dshProfile: string) => Promise<{ pid: number; cmdline: string } | undefined>;
     restartManagedServiceFn?: GuardianServiceOptions['restartManagedServiceFn'];
   } = {},
@@ -249,6 +250,7 @@ async function makeHarness(
     staleMs: 60,
     engineDeadMs: overrides.engineDeadMs ?? 120_000,
     takeoverGracePolls: 1,
+    startupTakeover: overrides.startupTakeover ?? true,
     sendDelayMs: 0,
     dshBin: '/fake/dsh/bin.js',
     createChannel: channelMock.createChannel,
@@ -327,6 +329,18 @@ describe('GuardianService', () => {
     expect(harness.sent).toHaveLength(0);
     expect(harness.service.snapshot().mode).toBe('standby');
     expect(harness.service.snapshot().profileSeenUp).toBe(false);
+  });
+
+  it('does not relaunch or take over from a persisted standby state at guardian startup', async () => {
+    const harness = await makeHarness({
+      state: { profileSeenUp: true },
+      startupTakeover: false,
+    });
+    await harness.service.start();
+    await sleep(80);
+    expect(harness.spawnDetachedFn).not.toHaveBeenCalled();
+    expect(harness.handlers.message).toBeUndefined();
+    expect(harness.service.snapshot().mode).toBe('standby');
   });
 
   it('takes over after dsh goes down, then releases when dsh returns', async () => {

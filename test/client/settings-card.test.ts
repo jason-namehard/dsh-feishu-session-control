@@ -67,6 +67,7 @@ describe('dsh Web settings card', () => {
     expect(draftFrom({ appId: 'cli_test' })).toEqual(expect.objectContaining({
       appId: 'cli_test',
       appSecret: '',
+      adapter: 'web',
     }));
     expect(canSaveSnapshot({ status: 'ready', writable: false })).toBe(false);
     const set = vi.fn().mockResolvedValue(undefined);

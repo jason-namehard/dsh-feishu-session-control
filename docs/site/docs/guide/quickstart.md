@@ -24,7 +24,7 @@ npx dsh-lark-bot@latest setup --profile dsh-lark
 ## 第 2 步：启动并扫码绑定
 
 ```bash
-dsh --profile dsh-lark
+dsh web
 ```
 
 终端打印二维码，用飞书 / Lark App 扫码创建或选择 PersonalAgent 应用并绑定。

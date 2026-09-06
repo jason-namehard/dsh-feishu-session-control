@@ -21,8 +21,8 @@ npx dsh-lark-bot@latest setup --profile dsh-lark
 
 `setup` 会：定位本机 dsh → 预批准 pnpm 构建策略（protobufjs 等；既有 profile 同时固定到其
 安装元数据记录的精确 pnpm 版本，避免 Corepack/store 主版本冲突）→ 将同一 bundle 安装到
-`dsh-lark` 桥接 profile 和 `web` 会话管理 profile → **默认同时安装「安全网守护」**（见第
-6 节；不需要时加 `--no-guardian` 跳过）。Web profile 只挂载会话管理，不启动第二个飞书桥接。
+`dsh-lark` profile 和 `web` profile → **默认同时安装「安全网守护」**（见第
+6 节；不需要时加 `--no-guardian` 跳过）。正常使用时由 `web` profile 同时承载 DSH Web 和飞书桥接。
 
 如只需要飞书桥接，可加 `--no-web`；也可用 `--web-profile <name>` 指定 Web profile 名称。
 
@@ -54,10 +54,10 @@ npm/npx 扁平依赖布局也可正常识别。Guardian unit 同时会过滤 upd
 ## 3. 启动并扫码（首次一次性绑定）
 
 ```bash
-dsh --profile dsh-lark
+dsh web
 ```
 
-dsh 以标准插件方式加载桥接引擎；首次启动（无凭据时）终端显示二维码：
+dsh 以标准插件方式加载 Web 与桥接插件；首次启动（无凭据时）终端显示二维码：
 
 1. 终端显示二维码。
 2. 使用飞书 App 扫码。
@@ -70,7 +70,7 @@ dsh 以标准插件方式加载桥接引擎；首次启动（无凭据时）终�
 `im:message.group_msg`，再以以下环境变量启动：
 
 ```bash
-DSH_LARK_GROUP_NO_AT=true DSH_LARK_GROUP_POLL_MS=3000 dsh --profile dsh-lark
+DSH_LARK_GROUP_NO_AT=true DSH_LARK_GROUP_POLL_MS=3000 dsh web
 ```
 
 这是显式 opt-in：bridge 会处理白名单成员的实时无 @ 消息，并只轮询已登记群聊；历史路径仅处理
@@ -109,7 +109,7 @@ session/worktree/archive 数据。额外实例不受默认 guardian 救援。
 
 ```bash
 DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu \
-  dsh --profile dsh-lark
+  dsh web
 ```
 
 ## 4. 卸载
@@ -188,7 +188,9 @@ SDK / ACP 启动时若未显式设置 provider/model，会读取 dsh 对象形�
 
 打开本机 dsh Web 的 **Settings → Plugins → Plugin configuration → dsh-lark-bot**。这里可修改 App ID/Secret、默认项目文件夹、模型、每会话并行数、adapter 和默认提醒。Secret 只写不回显；连接类字段保存后自动重连，模型/并行数/提醒从下一任务或提醒热生效且不中断当前任务。页面底部可直接检查常见配置问题，也可复制 `/status`（Bot 没反应）或 `/doctor`（任务失败）到飞书会话深入诊断。远程浏览器为只读时，请回到运行 dsh 的本机 Web 操作。
 
-默认 backend 为官方 `@deepseek-ai/dsh-sdk-client`（`DSH_LARK_ADAPTER=sdk`）：首次启动会自动在
+默认 backend 为当前 dsh Web 会话（`DSH_LARK_ADAPTER=web`）：桥接与 Web 运行在同一个前台 dsh
+进程中，关闭该窗口会同时关闭 Web 和飞书连接。需要独立 SDK runtime 时可显式设置
+`DSH_LARK_ADAPTER=sdk`；首次启动会自动在
 `~/.dsh/profiles/dsh-lark-sdk` 创建 SDK JSON-RPC runtime profile（bundle `dsh-base` +
 基于官方 server 的最小附件上传扩展），需要本机可用 `pnpm`；默认 SDK 已通过 rc.8 approval
 answerer 支持逐工具审批。扩展只把图片交给 dsh attachment store 入库，其他 SDK 方法仍由官方
@@ -258,7 +260,7 @@ shell 调用仍按高风险处理。等待仅暂停
 dsh plugin --profile web add dsh-lark-bot@<version>
 ```
 
-Web profile 只启用会话管理，不会启动第二个飞书桥接。飞书侧可使用 `/sessions` 列表、`/use <alias>`
+Web profile 同时启用会话管理和唯一的飞书桥接，不要再并行启动 `dsh-lark` profile。飞书侧可使用 `/sessions` 列表、`/use <alias>`
 切换、`/delete <alias>` 移入回收站、`/purge <alias>` 永久清理；删除和永久清理均要求在确认卡上再次确认。
 完整生命周期说明见 [`docs/SESSION_MANAGEMENT.md`](SESSION_MANAGEMENT.md)。
 
@@ -334,7 +336,7 @@ SDK runtime 不可用（如缺 pnpm）时自动回退 headless——此时任务
 
 dsh runtime profile（由 bot 首次启动自动创建于 `~/.dsh/profiles/`）：
 
-- `dsh-lark-sdk`：SDK JSON-RPC runtime（`DSH_LARK_ADAPTER=sdk`，默认）
+- `dsh-lark-sdk`：SDK JSON-RPC runtime（`DSH_LARK_ADAPTER=sdk`，显式选择）
 - `dsh-lark-acp`：ACP runtime（`DSH_LARK_ADAPTER=acp`，审批）
 - `dsh-lark-safe`：仅核心安全 profile（`/safemode` 时由守护创建，`dsh-base` + `dsh-headless`）
 - `dsh-lark-safe-sdk`：安全模式的 SDK 流式 runtime（`/safemode` 时由守护优先创建，

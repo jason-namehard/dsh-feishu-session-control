@@ -42,13 +42,13 @@ npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes
 未使用 `--restart` 时，升级后手动重启 profile 使新版本生效：
 
 ```bash
-dsh --profile dsh-lark
+dsh web
 ```
 
 ## 2. 启动与首次扫码 · Start & first scan
 
 ```bash
-dsh --profile dsh-lark
+dsh web
 ```
 
 首次启动（无凭据时）在终端显示二维码，用飞书 / Lark App 扫码，选择或创建 PersonalAgent
@@ -71,7 +71,7 @@ install/start 会拒绝同 profile 的既有前台进程，并以生命周期锁
 
 ```bash
 DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu \
-  dsh --profile dsh-lark
+  dsh web
 ```
 
 ## 3. 卸载 · Uninstall
@@ -469,7 +469,7 @@ dsh plugin --profile dsh-lark remove dsh-lark-bot
 | `DSH_LARK_WORKSPACE` | 未设置 | 新会话默认工作目录 |
 | `DSH_LARK_DSH_COMMAND` | 自动发现 | dsh 启动命令 |
 | `DSH_LARK_DSH_ARGS` | 自动发现 | dsh 启动参数 |
-| `DSH_LARK_ADAPTER` | `sdk` | `sdk`（默认，逐操作审批）/ `acp`（协议原生审批）/ `headless`（legacy）/ `web`（本地 dsh web agent，单写者） |
+| `DSH_LARK_ADAPTER` | `web` | `web`（默认，本地 dsh Web 单写者）/ `sdk`（逐操作审批）/ `acp`（协议原生审批）/ `headless`（legacy） |
 | `DSH_LARK_PROVIDER` | 未设置 | 模型 provider；可由对象形式的 dsh 默认模型提供 |
 | `DSH_LARK_MODEL` | 未设置 | 默认模型；可由 dsh `agent-default-model` 提供 |
 | `DSH_LARK_MODEL_CATALOG_URL` | `https://models.dev/api.json` | provider / 模型能力实时目录或兼容镜像 |

@@ -44,10 +44,10 @@
         ▼
 ┌──────────────────────────────────────────┐
 │  adapters/  agent 后端适配层               │
-│  · dsh-sdk（官方 SDK client，默认）         │
+│  · dsh-web（本地 dsh Web agent，默认）       │
 │  · dsh-acp（ACP 审批通道，可选）            │
 │  · dsh-headless（legacy fallback）          │
-│  · dsh-web（本地 dsh web agent，单写者）    │
+│  · dsh-sdk（官方 SDK client，可选）         │
 └──────────────────────────────────────────┘
         │
         ▼
@@ -345,7 +345,7 @@ HTTP 入口。
 11. **安全网守护（issue #6）**：dsh 采用「一切皆插件」架构，任一第三方插件都可能让整个组合
    boot 失败，导致桥接引擎与 dsh 一起下线。因此在插件托管架构之外，额外提供**独立于 dsh
    进程的最小「安全网守护」**：桥接引擎周期写入心跳文件（`<bridge-profile>/guardian/
-   heartbeat.json`），守护仅在「曾观察 dsh 在线 且 心跳过期 / 无 dsh 进程」时接管飞书长连接
+   heartbeat.json`），守护仅在本次守护进程运行期间观察到 dsh 在线、随后心跳过期 / 无 dsh 进程时接管飞书长连接
    （同 app 单长连接约束：dsh 在线时守护必须静默，绝不抢占通道）。心跳在 `{pid, startedAt, ts}` 之外还携带
     **channel readiness 快照**（`state/generation/reconnectAttempts/lastInboundAt/
     lastReconnectAt/lastError`），让 `service status`、`doctor`、`guardian status` 区分「引擎进程活着」
@@ -435,7 +435,7 @@ HTTP 入口。
 | `src/session/` | 会话路由、上下文记忆、持久化 |
 | `src/tui/` | dsh-TUI Host Descriptor 五态 admission 与可选 lifecycle seam |
 | `src/workspace/` | 项目工作区管理 |
-| `src/adapters/` | agent 后端适配器（sdk 默认 / acp 审批 / headless legacy / web 单写者） |
+| `src/adapters/` | agent 后端适配器（web 默认单写者 / sdk 独立 runtime / acp 审批 / headless legacy） |
 | `src/card/` | 流式过程卡（schema 2.0 原生折叠面板 + 顶层兼容快照 + legacy renderer）、审批 / 问答 / 计划决策卡状态与渲染；最终回答由正常 run-flow / guardian 分别单独发送 |
 | `src/bot/` | 持久任务账本、运行注册、消息排队、审批 / 问答 / 计划 registry、群聊隔离策略，以及多机器人 fleet / 跨进程交接计数 |
 | `src/commands/` | 斜杠命令（/cd /ws /new …） |

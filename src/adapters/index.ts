@@ -44,10 +44,10 @@ export async function resolveAdapterRoute(
 
 /**
  * Build the agent adapter for the configured mode:
- * - `sdk` (default): official `@deepseek-ai/dsh-sdk-client` runtime.
+ * - `web` (default): drive the local dsh web agent via its HTTP API (single writer).
+ * - `sdk`: official `@deepseek-ai/dsh-sdk-client` runtime.
  * - `acp`: official ACP server runtime with approval cards.
  * - `headless`: legacy subprocess fallback (kept for compatibility).
- * - `web`: drive the local dsh web agent via its HTTP API (single writer).
  */
 export async function buildAgentAdapter(
   env: RuntimeEnv,

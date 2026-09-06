@@ -158,7 +158,7 @@ function parseStopGrace(value: string | undefined): number {
 }
 
 function parseAdapterMode(value: string | undefined): AdapterMode {
-  const mode = nonEmpty(value) ?? 'sdk';
+  const mode = nonEmpty(value) ?? 'web';
   if (mode !== 'sdk' && mode !== 'acp' && mode !== 'headless' && mode !== 'web') {
     throw new Error(`DSH_LARK_ADAPTER must be "sdk", "acp", "headless" or "web", got "${mode}"`);
   }

@@ -31,7 +31,7 @@ export const SETTINGS_FIELDS: readonly SettingsField[] = [
   { key: 'workspace', label: '默认项目文件夹 / Workspace', help: '新会话默认打开的本机项目目录，例如 /Users/me/project。', timing: '新会话生效（保存后自动重连）' },
   { key: 'model', label: '默认模型 / Model', help: '新任务使用的 provider/model 路由。', timing: '保存后热更新，下一任务生效' },
   { key: 'scopeConcurrency', label: '并行任务数 / Parallel tasks', help: '每个飞书会话同时运行的任务数，建议 1–4。', timing: '保存后立即生效于新任务' },
-  { key: 'adapter', label: '运行方式 / Runtime mode', help: '一般选择 sdk；只有连接现有 dsh Web 会话时选择 web。', timing: '保存后自动重连生效' },
+  { key: 'adapter', label: '运行方式 / Runtime mode', help: '默认使用当前 dsh Web；只有需要独立 SDK runtime 时才选择 sdk。', timing: '保存后自动重连生效' },
   { key: 'notificationDefault', label: '默认提醒 / Notifications', help: '会话未单独设置时，是否主动提醒完成、失败和审批。', timing: '保存后立即生效于新提醒' },
 ] as const;
 
@@ -79,7 +79,7 @@ export function draftFrom(value: BrowserSettings | undefined): SettingsDraft {
     workspace: value?.workspace ?? '',
     model: value?.model ?? '',
     scopeConcurrency: value?.scopeConcurrency === undefined ? '' : String(value.scopeConcurrency),
-    adapter: value?.adapter ?? 'sdk',
+    adapter: value?.adapter ?? 'web',
     notificationDefault: value?.notificationDefault ?? 'off',
   };
 }
@@ -105,7 +105,7 @@ export function buildWebDiagnostic(snapshot: BrowserDiagnosticSnapshot): string 
     findings.push('当前是远端只读视图；修改设置需打开运行 dsh 的本机 Web。');
   }
   if (findings.length === 0) {
-    return `✅ 页面配置检查通过：${value.tenant ?? 'feishu'} / ${value.adapter ?? 'sdk'}，App ID、工作目录和模型均已配置。App Secret 按安全策略不回显；如 bot 仍无响应，请重新填写密钥后保存，或在飞书运行 /status。`;
+    return `✅ 页面配置检查通过：${value.tenant ?? 'feishu'} / ${value.adapter ?? 'web'}，App ID、工作目录和模型均已配置。App Secret 按安全策略不回显；如 bot 仍无响应，请重新填写密钥后保存，或在飞书运行 /status。`;
   }
   return `⚠️ 页面配置发现 ${findings.length} 项：\n${findings.map((item) => `• ${item}`).join('\n')}\nApp Secret 按安全策略不回显；连接失败时可重新填写后保存。`;
 }
@@ -170,7 +170,7 @@ function SettingsCard({ scope }: { scope: SettingsScope<BrowserSettings> }) {
       <header style={styles.header}>
         <div>
           <strong style={styles.title}>飞书 / Lark 机器人</strong>
-          <div style={styles.subtitle}>常用设置可直接在这里完成，不需要环境变量或命令行。</div>
+          <div style={styles.subtitle}>在运行 DSH 的本机 Web 中可直接保存；手机或局域网打开时设置页按安全策略为只读。</div>
         </div>
         <span style={styles.badge}>dsh-lark-bot</span>
       </header>
@@ -182,7 +182,7 @@ function SettingsCard({ scope }: { scope: SettingsScope<BrowserSettings> }) {
         <TextField field={SETTINGS_FIELDS[3]!} value={draft.workspace ?? ''} placeholder="/Users/me/project" onChange={update} />
         <TextField field={SETTINGS_FIELDS[4]!} value={draft.model ?? ''} placeholder="provider/model" onChange={update} />
         <TextField field={SETTINGS_FIELDS[5]!} value={draft.scopeConcurrency ?? ''} placeholder="2" inputMode="numeric" onChange={update} />
-        <SelectField field={SETTINGS_FIELDS[6]!} value={draft.adapter ?? 'sdk'} options={[['sdk', 'SDK（推荐）'], ['web', 'dsh Web 会话'], ['acp', 'ACP'], ['headless', '命令行兼容']]} onChange={update} />
+        <SelectField field={SETTINGS_FIELDS[6]!} value={draft.adapter ?? 'web'} options={[['web', 'dsh Web（推荐）'], ['sdk', 'SDK'], ['acp', 'ACP'], ['headless', '命令行兼容']]} onChange={update} />
         <SelectField field={SETTINGS_FIELDS[7]!} value={draft.notificationDefault ?? 'off'} options={[['off', '关闭（默认）'], ['completed', '完成与失败'], ['all', '完成、失败和审批']]} onChange={update} />
       </div>
 
@@ -190,7 +190,7 @@ function SettingsCard({ scope }: { scope: SettingsScope<BrowserSettings> }) {
         <button type="button" style={styles.primaryButton} disabled={saving || !canSaveSnapshot(snapshot)} onClick={() => { void save(); }}>
           {saving ? '保存中…' : '保存设置'}
         </button>
-        {!snapshot.writable && <span style={styles.muted}>当前连接为只读；请在本机 dsh Web 中修改。</span>}
+        {!snapshot.writable && <span style={styles.muted}>当前连接为只读；请在运行 DSH 的电脑上打开 http://127.0.0.1:3080 修改。</span>}
         {message && <span role="status" style={styles.message}>{message}</span>}
       </div>
 

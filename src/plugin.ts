@@ -32,7 +32,7 @@ export interface Config {
   tenant?: 'feishu' | 'lark';
   /** Default workspace for new sessions (env `DSH_LARK_WORKSPACE`). */
   workspace?: string;
-  /** Agent backend mode: `sdk` (default) / `acp` / `headless` / `web`. */
+  /** Agent backend mode: `web` (default) / `sdk` / `acp` / `headless`. */
   adapter?: 'sdk' | 'acp' | 'headless' | 'web';
   /** Local DSH Web host used for single-writer session projection. */
   webUrl?: string;
@@ -69,7 +69,7 @@ export const Config = Schema.object({
   workspace: Schema.string()
     .description('新会话默认打开的项目文件夹 / Default project folder for new sessions'),
   adapter: Schema.union(['sdk', 'acp', 'headless', 'web'])
-    .description('运行方式；推荐 sdk，保存后自动重连 / Runtime mode; sdk is recommended'),
+    .description('运行方式；推荐 dsh Web，保存后自动重连 / Runtime mode; dsh Web is recommended'),
   webUrl: Schema.string()
     .description('仅 web 模式使用的本机 dsh Web 地址 / Local dsh Web address used only in web mode'),
   sessionProjection: Schema.boolean()
@@ -188,7 +188,6 @@ export class LarkBridgeService extends Service {
 
 export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) {
   const service = new LarkBridgeService(ctx);
-  const webHost = hasWebServer(ctx);
   const detachTui = attachOptionalTuiSeams(ctx);
   let source = () => config;
   let appliedConfig: Config | undefined;
@@ -212,7 +211,7 @@ export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) 
         }
         await service.stop();
         if (disposed || ticket !== revision) return;
-        if (!isDisabled(desired) && !webHost) {
+        if (!isDisabled(desired)) {
           const engine = await service.start(desired, deps);
           ctx.logger.info(
             `[dsh-lark-bot] bridge engine running (profile=${engine.profile}, home=${engine.home})`,
@@ -266,7 +265,7 @@ export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) 
 
   const disabled = isDisabled(config);
   ctx.logger.info(
-    `[dsh-lark-bot] bundle loaded; ${webHost ? 'web profile integration only; Feishu bridge is disabled' : disabled ? 'bridge engine disabled (DSH_LARK_DISABLED=1)' : 'bridge engine will start in-process'}`,
+    `[dsh-lark-bot] bundle loaded; ${disabled ? 'bridge engine disabled (DSH_LARK_DISABLED=1)' : 'bridge engine will start in-process'}`,
   );
   // Cordis uses the plugin's returned disposer to run cleanup when the fiber
   // unloads (profile stop / reload / `dsh plugin remove`).
@@ -301,14 +300,6 @@ async function hydrateSettingsBase(config: Config, baseEnv: NodeJS.ProcessEnv): 
   if (workspace !== undefined) hydrated.workspace = workspace;
   if (model !== undefined) hydrated.model = model;
   return hydrated;
-}
-
-function hasWebServer(ctx: Context): boolean {
-  try {
-    return Boolean(ctx.get('webServer'));
-  } catch {
-    return false;
-  }
 }
 
 function isDisabled(config: Config): boolean {

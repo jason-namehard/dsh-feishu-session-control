@@ -53,8 +53,8 @@ export function loadRuntimeEnv(source?: NodeJS.ProcessEnv): RuntimeEnv;
 环境变量前缀统一为 `DSH_LARK_*`，敏感值只保留在运行时对象中，不写入日志或提交。完整清单见
 `README.md` 与 `.env.example`；本节仅列关键项：
 
-- `DSH_LARK_ADAPTER`：`sdk`（默认，官方 SDK client + approval answerer）/ `acp`（协议原生审批）/ `headless`（legacy）/
-  `web`（本地 dsh web agent，单写者）。
+- `DSH_LARK_ADAPTER`：`web`（默认，本地 dsh web agent，单写者）/ `sdk`（官方 SDK client + approval answerer）/
+  `acp`（协议原生审批）/ `headless`（legacy）。
 - `DSH_LARK_WEB_URL`：`web` 适配器的本地 dsh web base URL（默认
   `http://127.0.0.1:3080`）。
 - `DSH_LARK_MODEL_CATALOG_URL`：models.dev 兼容目录地址；默认使用公开 `api.json`。
@@ -587,7 +587,10 @@ export async function buildAgentAdapter(
 ): Promise<AgentAdapter>;
 ```
 
-- `sdk`（默认）：`SdkDshAdapter`（`src/adapters/dsh/sdk-adapter.ts`），先 `ensureSdkProfile`
+- `web`（默认）：`WebDshAdapter`（`src/adapters/dsh/web-adapter.ts`），通过本机 DSH Web 的
+  `session.prompt` 与事件 mux 复用同一 session 写入者；飞书的 `/session` 确认后才绑定历史，
+  不会因 WebUI/TUI 的 open、resume 或 activity 自动切换飞书 scope。
+- `sdk`（可选）：`SdkDshAdapter`（`src/adapters/dsh/sdk-adapter.ts`），先 `ensureSdkProfile`
   创建 `~/.dsh/profiles/dsh-lark-sdk`（`dsh-base` + `dsh-sdk-jsonrpc-server`），按
   `scope + workspace` 管理 `DeepSeekHarness` 取消域，同 scope 并发 session 使用独立 runtime；
   stop handle 只关闭自己捕获的 runtime。`session(id)` 仅在当前 adapter 仍拥有同一 live
@@ -861,7 +864,8 @@ export interface Logger {
 
 - `./plugin`（`src/plugin.ts`）：cordis 插件 `dsh-lark-bot`，提供 `ctx.larkBridge` 服务
   （`status()` / `stop()` / `start()`）；默认在 profile 启动时**进程内**启动桥接引擎，
-  配置 `{ profile?, home?, appId?, appSecret?, tenant?, workspace?, adapter?, model?, disabled? }`；
+  Web profile 也启动同一桥接引擎，因而 DSH Web、飞书 WebSocket、通知回调和心跳共用一个
+  前台进程；配置 `{ profile?, home?, appId?, appSecret?, tenant?, workspace?, adapter?, model?, disabled? }`；
   `DSH_LARK_DISABLED=1` 时保持停止。
 - `./invariant`（`src/invariant.ts`）：`dsh-lark-bot-invariant` 伴生模块，向宿主
   `invariants` 注册表登记包归属（与官方 dsh-lark-channel/invariant 同契约）。

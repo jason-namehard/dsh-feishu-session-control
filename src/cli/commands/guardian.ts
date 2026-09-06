@@ -59,7 +59,7 @@ export async function runGuardian(
   await service.start();
   printLines([
     `安全网守护运行中（pid=${process.pid}，dsh profile=${service.snapshot().dshProfile}）。`,
-    'dsh 正常运行时保持静默；dsh 下线后自动接管飞书通道，等待 /safemode 控制信号。',
+    'dsh 正常运行时保持静默；本次守护进程观察到用户启动 dsh 后，若 dsh 下线才接管飞书通道，等待 /safemode 控制信号。',
   ]);
   await waitForShutdown();
   await service.stop();

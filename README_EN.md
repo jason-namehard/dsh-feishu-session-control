@@ -28,13 +28,15 @@ Make DeepSeek Harness a member of your Feishu/Lark and drive your local coding a
 
 ```bash
 npx dsh-lark-bot@latest setup --profile dsh-lark   # ① one-command install (into a dsh profile + safety-net guardian by default)
-dsh --profile dsh-lark                              # ② start
+dsh web                                             # ② start DSH Web + the Feishu bridge in one foreground process
 ```
+
+Do not start `dsh --profile dsh-lark` at the same time: that would create a second Feishu WebSocket consumer.
 
 ③ On first start the terminal prints a QR code → scan it with the Feishu app to create / select a PersonalAgent
 app → once bound, message the bot directly; groups / threads default to `@bot`.
 
-- **Already have an app**: skip the scan with `DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu dsh --profile dsh-lark`.
+- **Already have an app**: skip the scan with `DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu dsh web`.
 - **Upgrade**: `npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes`.
 
 > **No terminal needed**: an admin just sends `/upgrade` in Feishu.
@@ -100,7 +102,7 @@ Command help, status, and cards are bilingual; `/help` is the full authoritative
 ## FAQ
 
 **Q: How do I connect DeepSeek Harness to Feishu?**
-**A:** With Node ≥ 22 and dsh installed (and `DEEPSEEK_API_KEY` set), run `npx dsh-lark-bot@latest setup --profile dsh-lark`, then `dsh --profile dsh-lark` and scan the QR code. DM the bot directly; groups / threads default to `@bot`.
+**A:** With Node ≥ 22 and dsh installed (and `DEEPSEEK_API_KEY` set), run `npx dsh-lark-bot@latest setup --profile dsh-lark`, then `dsh web` and scan the QR code. DM the bot directly; groups / threads default to `@bot`.
 
 **Q: Do I need a public IP, domain, or server?**
 **A:** No. Feishu uses a WebSocket long connection (outbound), so it works behind NAT — no public server, domain, or NAT-tunnelling.
@@ -116,7 +118,7 @@ Command help, status, and cards are bilingual; `/help` is the full authoritative
 ## Compatibility
 
 - **DeepSeek Harness (`dsh`)**: verified against **0.1.0-rc.8** (2026-08-25) via the official `@deepseek-ai/dsh-sdk-client` / `dsh-acp`; locked versions & upgrade policy in [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
-- **Runtime**: Node.js ≥ 22.19; **Platforms**: Linux / macOS / Windows. Default adapter `sdk` (native resume / streaming / image blocks); switchable to `acp` / `headless` / `web`.
+- **Runtime**: Node.js ≥ 22.19; **Platforms**: Linux / macOS / Windows. Default adapter `web` (the local dsh Web session); switchable to `sdk` / `acp` / `headless`.
 
 ## Configuration
 

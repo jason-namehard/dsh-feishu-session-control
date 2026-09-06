@@ -76,7 +76,7 @@ import {
  * A minimal process independent of dsh / Cordis that:
  *  1. stays silent (no Feishu connection) while the dsh profile is up
  *     (fresh bridge heartbeat or live `dsh --profile <name>` process);
- *  2. after the profile has been observed up once, takes over the Feishu
+ *  2. after the profile has been observed up during this guardian process, takes over the Feishu
  *     channel when dsh goes down and accepts control signals
  *     (`/safemode` family);
  *  3. on `/safemode`, provisions a core-only safe profile
@@ -107,6 +107,7 @@ export interface GuardianServiceOptions {
   relaunchReadyTimeoutMs?: number;
   /** Consecutive polls dsh must be down before taking over (flap guard). */
   takeoverGracePolls?: number;
+  startupTakeover?: boolean;
   /** Delay between the `/safemode exit` reply and channel disconnect (ms). */
   sendDelayMs?: number;
   now?: () => number;
@@ -198,7 +199,8 @@ export class GuardianService {
       | 'engineDeadMs'
       | 'relaunchCooldownMs'
       | 'relaunchReadyTimeoutMs'
-      | 'takeoverGracePolls'
+       | 'takeoverGracePolls'
+       | 'startupTakeover'
       | 'sendDelayMs'
       | 'safeAdapterMode'
       | 'safeTimeoutMs'
@@ -240,6 +242,7 @@ export class GuardianService {
   private config: ProfileConfig | undefined;
   private readonly eventFreshnessMs: number;
   private readonly activeMessages = new Set<Promise<void>>();
+  private profileSeenThisRun = false;
 
   constructor(options: GuardianServiceOptions) {
     this.options = {
@@ -249,6 +252,7 @@ export class GuardianService {
       relaunchCooldownMs: options.relaunchCooldownMs ?? RELAUNCH_COOLDOWN_MS,
       relaunchReadyTimeoutMs: options.relaunchReadyTimeoutMs ?? RELAUNCH_READY_TIMEOUT_MS,
       takeoverGracePolls: options.takeoverGracePolls ?? 2,
+      startupTakeover: options.startupTakeover ?? false,
       sendDelayMs: options.sendDelayMs ?? 600,
       safeAdapterMode: options.safeAdapterMode ?? 'auto',
       safeTimeoutMs: options.safeTimeoutMs ?? SAFE_RUN_TIMEOUT_MS,
@@ -296,6 +300,8 @@ export class GuardianService {
     } else {
       this.state = loaded;
     }
+    this.profileSeenThisRun = this.state.mode !== 'standby' ||
+      (this.options.startupTakeover && this.state.profileSeenUp);
     await this.loadContext();
     await this.save();
     await this.tick();
@@ -377,6 +383,7 @@ export class GuardianService {
   }
 
   private async setSeenUp(): Promise<void> {
+    this.profileSeenThisRun = true;
     if (this.state.profileSeenUp) return;
     this.state.profileSeenUp = true;
     await this.save();
@@ -456,7 +463,7 @@ export class GuardianService {
       }
 
       // dsh is down.
-      if (!this.state.profileSeenUp) return; // never observed up: stay silent
+      if (!this.profileSeenThisRun) return; // wait for a DSH start in this process
       this.downStreak += 1;
       if (this.downStreak < this.options.takeoverGracePolls) return;
       // Auto-relaunch lifecycle: after a relaunch, wait for the bridge to come

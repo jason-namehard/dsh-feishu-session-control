@@ -32,6 +32,25 @@
 > `@deepseek-ai/dsh-session-persistence-sqlite`，托管 SDK/ACP profile 使用 JSONL。upgrade 不打开或改写
 > 用户自定义 SQLite 数据库；自定义 SQLite profile 必须保留 rc.7 runtime 或自行导出后新建 schema 17。
 
+## 2.1 新版 DSH 隔离验证 · Isolated next-version verification
+
+生产环境不要直接升级来试错。为下一个候选版本建立独立的 `DSH_HOME`，例如
+`E:\DeepSeekHarness\dsh-test-home`；它拥有自己的 `profiles`、依赖、日志、凭据和 session
+目录，不读取或修改生产 `E:\DeepSeekHarness\dsh-home`。
+
+当前已完成的隔离探针为 `@deepseek-ai/dsh@0.1.2-rc.1`：
+
+- `dsh --version` 输出 `0.1.2-rc.1`；
+- `dsh --profile web --dump-config` 成功合成配置，并加载 `dsh-lark-bot/plugin`、
+  `dsh-lark-bot/session-manager` 及通知工具；
+- `DSH_LARK_DISABLED=1 dsh --profile web --no-open --port 0` 成功启动 Web host，
+  随后关闭测试进程；未连接真实飞书，也没有触碰生产 session。
+
+这只是启动兼容性通过，不等于 SDK / ACP 全部兼容。因此兼容矩阵仍保持已验证的
+`0.1.0-rc.8`；只有完成真实 `/sessions`、`/new`、`/use`、`/delete`、`/purge` 与 SDK/ACP
+探针后，才把矩阵和依赖 pin 改到新版。生产更新顺序应是：隔离验证 → 本地 commit → 备份配置 →
+停止生产 DSH → 更新 profile 插件 / DSH → 启动并检查 `/doctor` → 失败则回滚。
+
 ## 3. 版本探测 · Version probing（#14 修复后的语义）
 
 - `fetchNpmLatestVersion`（`src/upgrade/versions.ts`）：**最多 3 次尝试 + 退避重试**，每次依次

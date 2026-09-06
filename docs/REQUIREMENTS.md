@@ -378,7 +378,7 @@
 3. **工作区管理是核心差异化**——会话绑定 git worktree + 项目规则注入 + 上下文持久化。
 4. **注意**：dsh 与 claude/codex 接口不同（官方提供 SDK client / ACP server / headless 三种接入形态，
    后者是常驻交互式 REPL），所以「换 dsh」不是 1:1 替换，需重写 agent adapter 层。当前实现：
-   **默认 SDK client**（原生 session + 流式 thinking/text + approval answerer）、**ACP 协议原生审批模式**、**headless legacy**，
+   **默认 Web adapter**（本地 DSH Web session/event mux）、**SDK client 可选**（原生 session + 流式 thinking/text + approval answerer）、**ACP 协议原生审批模式**、**headless legacy**，
    三者都收敛到同一 `AgentEvent` 契约，飞书层无需感知差异。
 
 ---
