@@ -2,12 +2,12 @@
 layout: home
 
 hero:
-  name: dsh-lark-bot
+  name: DSH飞书session管理
   text: 把 DeepSeek Harness 装进飞书 / Lark
   tagline: 扫码即用，在手机飞书里指挥本机 coding agent。流式卡片、并行任务、多角色 Agent、跨会话主动通知、通知转发到其他 IM 与安全网守护。
   image:
     src: /logo.svg
-    alt: dsh-lark-bot
+    alt: DSH飞书session管理
   actions:
     - theme: brand
       text: 快速开始
@@ -15,9 +15,6 @@ hero:
     - theme: alt
       text: 通知转发到其他 IM
       link: /guide/notification-sinks
-    - theme: alt
-      text: GitHub
-      link: https://github.com/PlutoKeating/dsh-lark-bot
 
 features:
   - icon: 🛡️
@@ -59,8 +56,10 @@ features:
 
 ---
 
-::: warning 官方渠道声明
-唯一官方仓库 [github.com/PlutoKeating/dsh-lark-bot](https://github.com/PlutoKeating/dsh-lark-bot)；唯一官方 npm 包 `dsh-lark-bot` / `dsh-feishu-bot`（维护者 **plutokeating**）。本项目**从不提供 .exe 或“下载即运行”的安装包**，任何以此名义分发的页面 / 仓库均为假冒 / 恶意来源。
+::: warning 项目身份声明
+本项目正式名称为 **DSH飞书session管理**，由 **见川**维护，是独立发布的整合与重构项目。
+GitHub 地址将在发布前补入；npm/DSH 兼容包名暂保留为 `dsh-lark-bot`。本项目从不提供 `.exe`
+或“下载即运行”的安装包。
 :::
 
 ## 一键安装

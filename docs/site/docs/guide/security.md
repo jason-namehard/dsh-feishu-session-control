@@ -1,16 +1,18 @@
 ---
 title: 安全与权限
-description: 访问白名单、工具权限、密钥处理与官方渠道 / 假冒警示。
+description: 访问白名单、工具权限、密钥处理与项目来源 / 假冒警示。
 ---
 
 # 安全与权限
 
-访问白名单、工具权限、密钥处理与官方渠道 / 假冒警示。
+访问白名单、工具权限、密钥处理与项目来源 / 假冒警示。
 
-## 官方渠道声明
+## 项目身份声明
 
-::: danger 仅认准官方渠道
-唯一官方仓库 [github.com/PlutoKeating/dsh-lark-bot](https://github.com/PlutoKeating/dsh-lark-bot)；唯一官方 npm 包 `dsh-lark-bot` / `dsh-feishu-bot`（维护者 **plutokeating**）。本项目**从不提供 .exe 或“下载即运行”的安装包**，凡以项目名义分发 exe 的页面 / 仓库皆为假冒 / 恶意来源。安装唯一命令：`npx dsh-lark-bot@latest setup --profile dsh-lark`。
+::: warning 当前发布说明
+本项目正式名称为 **DSH飞书session管理**，由 **见川**维护；GitHub 地址将在发布前补入。
+npm/DSH 兼容包名暂保留为 `dsh-lark-bot`。本项目从不提供 `.exe` 或“下载即运行”的安装包，
+凡以项目名义分发 exe 的页面 / 仓库都不可信。安装命令：`npx dsh-lark-bot@latest setup --profile dsh-lark`。
 :::
 
 ## 访问白名单

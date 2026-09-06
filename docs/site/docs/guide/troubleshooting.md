@@ -31,9 +31,9 @@ description: 诊断命令、常用问题与快速定位。
 
 先 `/channels list` 确认渠道已 `enable`；再用 `/notifications show` 确认 scope 的 `sinks=` 与渠道 id 一致。渠道发送失败只记结构化日志，不阻塞其他渠道。详见 [通知转发到其他 IM](/guide/notification-sinks)。
 
-### 怎么确认下载的是正版？
+### 怎么确认下载的是可信版本？
 
-只从 github.com/PlutoKeating/dsh-lark-bot 与 npm（`dsh-lark-bot` / `dsh-feishu-bot`）获取；凡提供 exe 的渠道均为假冒。
+GitHub 地址确认并发布后，只从本项目仓库与 npm（`dsh-lark-bot` / `dsh-feishu-bot`）获取；凡提供 exe 的渠道均不可信。
 
 ### 为什么说功能最全？
 

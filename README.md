@@ -1,6 +1,6 @@
 <h1 align="center">DSH飞书session管理</h1>
 
-<p align="center">🌏 <a href="README_EN.md">English</a> · 🌐 官网wiki <a href="https://dsh-lark-bot.arr2018.dpdns.org">dsh-lark-bot.arr2018.dpdns.org</a></p>
+<p align="center">🌏 <a href="README_EN.md">English</a> · 📦 <a href="docs/PROJECT_IDENTITY.md">项目身份与来源说明</a></p>
 
 <p align="center">
   <strong>把 DeepSeek Harness 装进飞书</strong> · 扫码 30 秒 · 手机指挥本机 coding agent · 崩溃了飞书也照样回你
@@ -12,10 +12,6 @@
   <img src="https://img.shields.io/badge/runtime-Node.js%20%E2%89%A5%2022-339933" alt="Node">
   <img src="https://img.shields.io/badge/License-AGPLv3-blue" alt="License">
   <img src="https://img.shields.io/badge/status-released-blue" alt="Status">
-  <a href="https://dshfind.com/zh/plugins/PlutoKeating/dsh-lark-bot?ref=badge"><img src="https://dshfind.com/api/badge/PlutoKeating/dsh-lark-bot?lang=zh" alt="dshfind"></a>
-  <a href="https://dshbase.com/zh/plugins/dsh-lark-bot"><img src="https://dshbase.com/badges/dsh-lark-bot.svg" alt="dshbase 实测可装"></a>
-  <a href="https://dsh-plugin.org/plugins/plutokeating/dsh-lark-bot"><img src="https://dsh-plugin.org/badges/listed.svg" alt="Listed on dsh-plugin.org"></a>
-  <a href="https://github.com/PlutoKeating/dsh-lark-bot/releases"><img src="https://img.shields.io/github/v/release/PlutoKeating/dsh-lark-bot?sort=semver&label=latest%20release" alt="Latest release"></a>
 </p>
 
 ## 项目简介
@@ -113,7 +109,7 @@ dsh --profile web                                   # ③ 按需启动 Web 会�
 **A:** 功能组合最全——安全网守护、并行多任务、多角色 Agent、多机器人交接、持久任务对账、会话归档、跨会话通知、dsh Web 可视化设置、对话内模型 / 密钥管理、执行模式、计划门禁、飞书内自更新。标准 dsh profile bundle，`setup` 是唯一安装路径。
 
 **Q: 会不会有假冒版本？**
-**A:** 唯一官方仓库 / npm 包见上方「仅认准官方渠道」；本项目从不提供 `.exe` 或“下载即运行”安装包，任何分发 exe 的都是假冒来源。
+**A:** GitHub 地址确认并发布后，只从本项目仓库和 npm 包获取；本项目从不提供 `.exe` 或“下载即运行”安装包，任何分发 exe 的都是假冒来源。
 
 ---
 
@@ -155,15 +151,13 @@ npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes   # 升级（或飞书�
 - **协作者**：[zhuguangjun2002](https://github.com/zhuguangjun2002) · [chensimo1992-sys](https://github.com/chensimo1992-sys) · [estelledc](https://github.com/estelledc) · [fredjiangyysx](https://github.com/fredjiangyysx) · [Geoffrey-hougaojie](https://github.com/Geoffrey-hougaojie) · [hellxiaoao](https://github.com/hellxiaoao) · [koprivnikarurnaa-oss](https://github.com/koprivnikarurnaa-oss) · [Normanyin](https://github.com/Normanyin) · [pancong0711](https://github.com/pancong0711) · [qvivp](https://github.com/qvivp)。
 - **文档**：`QUICK_START`（安装/快速开始）· `MANUAL`（完整手册+命令+环境变量）· `FEATURES`（能力行为细节）· `COMPATIBILITY`· `ARCHITECTURE`· `API`· `roadmap`。
 
-## 社区与生态
+## 相关生态
 
 | 平台 | 状态 |
 | :--- | :--- |
 | [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) | ✅ 已收录（[#1408](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/1408)） |
 | [awesome-dsh-plugins](https://github.com/AdamPlatin123/awesome-dsh-plugins) | ✅ 已收录 · 运行级可用 |
-| [dshfind](https://dshfind.com/zh/plugins/PlutoKeating/dsh-lark-bot) | ✅ 已收录 |
-| [dshbase](https://dshbase.com/zh/plugins/dsh-lark-bot) | ✅ 已收录 · 实测可装 |
-| [dsh-plugin.org](https://dsh-plugin.org/zh/plugins/plutokeating/dsh-lark-bot) | ✅ 已收录 · 官方源已核验 |
+| dshfind / dshbase / dsh-plugin.org | 上游项目历史收录，当前项目发布后重新登记 |
 | [omdsh-dev/community](https://github.com/orgs/omdsh-dev/discussions/11) | ✅ 收录申请通过 · 讨论活跃 |
 
 ## 安全提醒
@@ -173,7 +167,7 @@ npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes   # 升级（或飞书�
 > README 冒充官方分发。**本项目从不提供 exe，任何此类下载均为假冒 / 恶意来源。**
 >
 > 取证存档：[`docs/security/2026-08-17-impostor-repo-evidence/`](docs/security/2026-08-17-impostor-repo-evidence/README.md) ·
-> 官方下载渠道：[`docs/DOWNLOAD.md`](docs/DOWNLOAD.md) · 持续监控：`pnpm security:monitor`
+> 上游历史下载与取证说明：[`docs/DOWNLOAD.md`](docs/DOWNLOAD.md) · 持续监控：`pnpm security:monitor`
 
 ## 免责声明
 

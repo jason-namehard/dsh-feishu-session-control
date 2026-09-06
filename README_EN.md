@@ -1,6 +1,6 @@
 <h1 align="center">DSH Feishu Session Manager</h1>
 
-<p align="center">🌏 <a href="README.md">中文</a> · 🌐 Official wiki <a href="https://dsh-lark-bot.arr2018.dpdns.org">dsh-lark-bot.arr2018.dpdns.org</a></p>
+<p align="center">🌏 <a href="README.md">中文</a> · 📦 <a href="docs/PROJECT_IDENTITY.md">Project identity and provenance</a></p>
 
 <p align="center">
   <strong>Put DeepSeek Harness into Feishu</strong> · scan to connect in 30 s · drive your coding agent from your phone · Feishu still answers you if dsh crashes
@@ -12,10 +12,6 @@
   <img src="https://img.shields.io/badge/runtime-Node.js%20%E2%89%A5%2022-339933" alt="Node">
   <img src="https://img.shields.io/badge/License-AGPLv3-blue" alt="License">
   <img src="https://img.shields.io/badge/status-released-blue" alt="Status">
-  <a href="https://dshfind.com/zh/plugins/PlutoKeating/dsh-lark-bot?ref=badge"><img src="https://dshfind.com/api/badge/PlutoKeating/dsh-lark-bot?lang=en" alt="dshfind"></a>
-  <a href="https://dshbase.com/en/plugins/dsh-lark-bot"><img src="https://dshbase.com/badges/dsh-lark-bot.svg" alt="dshbase verified"></a>
-  <a href="https://dsh-plugin.org/plugins/plutokeating/dsh-lark-bot"><img src="https://dsh-plugin.org/badges/listed.svg" alt="Listed on dsh-plugin.org"></a>
-  <a href="https://github.com/PlutoKeating/dsh-lark-bot/releases"><img src="https://img.shields.io/github/v/release/PlutoKeating/dsh-lark-bot?sort=semver&label=latest%20release" alt="Latest release"></a>
 </p>
 
 ## Project Overview
@@ -155,15 +151,13 @@ npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes   # upgrade (or admin /
 - **Contributors**: [zhuguangjun2002](https://github.com/zhuguangjun2002) · [chensimo1992-sys](https://github.com/chensimo1992-sys) · [estelledc](https://github.com/estelledc) · [fredjiangyysx](https://github.com/fredjiangyysx) · [Geoffrey-hougaojie](https://github.com/Geoffrey-hougaojie) · [hellxiaoao](https://github.com/hellxiaoao) · [koprivnikarurnaa-oss](https://github.com/koprivnikarurnaa-oss) · [Normanyin](https://github.com/Normanyin) · [pancong0711](https://github.com/pancong0711) · [qvivp](https://github.com/qvivp).
 - **Docs**: `QUICK_START` (install / quick start) · `MANUAL` (full manual + commands + env vars) · `FEATURES` (capability behavior) · `COMPATIBILITY` · `ARCHITECTURE` · `API` · `roadmap`.
 
-## Community & ecosystem
+## Related ecosystem
 
 | Platform | Status |
 | :--- | :--- |
 | [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) | ✅ listed ([#1408](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/1408)) |
 | [awesome-dsh-plugins](https://github.com/AdamPlatin123/awesome-dsh-plugins) | ✅ listed · runtime-verified |
-| [dshfind](https://dshfind.com/zh/plugins/PlutoKeating/dsh-lark-bot) | ✅ listed |
-| [dshbase](https://dshbase.com/zh/plugins/dsh-lark-bot) | ✅ listed · install-verified |
-| [dsh-plugin.org](https://dsh-plugin.org/zh/plugins/plutokeating/dsh-lark-bot) | ✅ listed · official source verified |
+| dshfind / dshbase / dsh-plugin.org | Historical upstream listings; re-register this project after publication |
 | [omdsh-dev/community](https://github.com/orgs/omdsh-dev/discussions/11) | ✅ accepted · active |
 
 ## Security notice
@@ -173,7 +167,7 @@ npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes   # upgrade (or admin /
 > distribution with a "download Windows exe & run" README. **This project never ships an exe; any such download is fake / malicious.**
 >
 > Evidence archive: [`docs/security/2026-08-17-impostor-repo-evidence/`](docs/security/2026-08-17-impostor-repo-evidence/README.md) ·
-> Official download channel: [`docs/DOWNLOAD.md`](docs/DOWNLOAD.md) · Ongoing monitor: `pnpm security:monitor`.
+> Historical upstream download and evidence notes: [`docs/DOWNLOAD.md`](docs/DOWNLOAD.md) · Ongoing monitor: `pnpm security:monitor`.
 
 ## Disclaimer
 
