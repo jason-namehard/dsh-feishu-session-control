@@ -4,6 +4,8 @@ import { DshProviderManager, type DshModelSelection } from '../config/dsh-config
 import { DshAdapter } from './dsh/adapter.js';
 import { SdkDshAdapter } from './dsh/sdk-adapter.js';
 import { ensureSdkProfile, resolveSdkLaunch } from './dsh/sdk-runtime.js';
+import { HostDshAdapter } from './dsh/host-adapter.js';
+import type { HostContextLike } from './dsh/host-services.js';
 import { WebDshAdapter } from './dsh/web-adapter.js';
 import { resolveModelChoice } from './model-choice.js';
 import type { AgentAdapter } from './types.js';
@@ -11,6 +13,11 @@ import type { AgentAdapter } from './types.js';
 export interface AdapterPreferences {
   stopGraceMs: number | undefined;
   model: string | undefined;
+  /**
+   * The cordis context when the bridge runs as a plugin inside dsh. Its
+   * presence is what lets `web` upgrade itself to the in-process transport.
+   */
+  hostContext?: HostContextLike;
 }
 
 type AdapterRouteSource = Pick<
@@ -44,7 +51,11 @@ export async function resolveAdapterRoute(
 
 /**
  * Build the agent adapter for the configured mode:
- * - `web` (default): drive the local dsh web agent via its HTTP API (single writer).
+ * - `web` (default): drive dsh's own sessions as their single writer. In-process
+ *   when the bridge is mounted inside dsh (`preferences.hostContext`), which is
+ *   both faster and immune to the web transport's version drift; otherwise over
+ *   the local web HTTP API.
+ * - `host`: require the in-process transport and fail loudly without it.
  * - `sdk`: official `@deepseek-ai/dsh-sdk-client` runtime.
  * - `acp`: official ACP server runtime with approval cards.
  * - `headless`: legacy subprocess fallback (kept for compatibility).
@@ -87,11 +98,38 @@ export async function buildAgentAdapter(
         { ...preferences, model: managedRoute!.model },
       );
     }
+    case 'host':
     case 'web': {
+      const model = resolveModelChoice(preferences.model, env.model);
+      // Use the in-process transport whenever this process hosts dsh: calling
+      // the local web server from inside it buys nothing and puts browser
+      // authentication, RPC naming and the event-mux endpoint back on the
+      // compatibility surface (all three moved in 0.1.2-rc.1).
+      //
+      // The presence of a host context is the decision, not a probe for the
+      // agent registry: services appear asynchronously during boot, so a
+      // one-shot check here could lose a race and silently downgrade to HTTP.
+      // A dsh host with no agent registry cannot serve sessions over its own
+      // web API either, so there is nothing to fall back to — HostServices
+      // reports that case with an actionable error instead.
+      if (preferences.hostContext) {
+        return new HostDshAdapter({
+          ctx: preferences.hostContext,
+          provider: env.provider,
+          model,
+        });
+      }
+      if (env.adapterMode === 'host') {
+        throw new Error(
+          'DSH_LARK_ADAPTER=host requires running as a plugin inside dsh; ' +
+            'use "web" to reach a separate dsh web server over HTTP, or "sdk" ' +
+            'for the managed runtime.',
+        );
+      }
       return new WebDshAdapter({
         baseUrl: env.webBaseUrl,
         provider: env.provider,
-        model: resolveModelChoice(preferences.model, env.model),
+        model,
       });
     }
     case 'sdk':

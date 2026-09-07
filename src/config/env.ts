@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { resolveDshRuntime } from './dsh-runtime.js';
 
 export type LarkTenant = 'feishu' | 'lark';
-export type AdapterMode = 'sdk' | 'acp' | 'headless' | 'web';
+export type AdapterMode = 'sdk' | 'acp' | 'headless' | 'web' | 'host';
 export type NotificationDefault = 'off' | 'completed' | 'all';
 
 export interface RuntimeEnv {
@@ -159,8 +159,10 @@ function parseStopGrace(value: string | undefined): number {
 
 function parseAdapterMode(value: string | undefined): AdapterMode {
   const mode = nonEmpty(value) ?? 'web';
-  if (mode !== 'sdk' && mode !== 'acp' && mode !== 'headless' && mode !== 'web') {
-    throw new Error(`DSH_LARK_ADAPTER must be "sdk", "acp", "headless" or "web", got "${mode}"`);
+  if (mode !== 'sdk' && mode !== 'acp' && mode !== 'headless' && mode !== 'web' && mode !== 'host') {
+    throw new Error(
+      `DSH_LARK_ADAPTER must be "sdk", "acp", "headless", "web" or "host", got "${mode}"`,
+    );
   }
   return mode;
 }

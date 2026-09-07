@@ -5,6 +5,7 @@ import type { AgentAdapter } from '../../adapters/types.js';
 import type { LarkChannel } from '@larksuite/channel';
 import type { RuntimeEnv } from '../../config/env.js';
 import { buildAgentAdapter } from '../../adapters/index.js';
+import type { HostContextLike } from '../../adapters/dsh/host-services.js';
 import { ActiveRuns } from '../../bot/active-runs.js';
 import { ApprovalRegistry } from '../../bot/approvals.js';
 import { ConcurrencyStore } from '../../bot/concurrency-store.js';
@@ -124,6 +125,11 @@ export interface BridgeEngineOptions {
   createChannel?: Parameters<typeof startChannel>[0]['createChannel'];
   /** Injectable adapter (tests); otherwise built from env. */
   adapter?: AgentAdapter;
+  /**
+   * The cordis context when the bridge is started as a dsh plugin. Passing it
+   * lets the `web` adapter drive dsh in-process instead of over loopback HTTP.
+   */
+  hostContext?: HostContextLike;
 }
 
 export interface EnsureProfileOptions {
@@ -299,6 +305,7 @@ export async function startBridgeEngine(
     (await buildAgentAdapter(env, {
       stopGraceMs: activeProfile.preferences.stopGraceMs ?? env.stopGraceMs,
       model: activeProfile.preferences.model,
+      ...(options.hostContext ? { hostContext: options.hostContext } : {}),
     }));
   if (profileName !== 'default' && fleet.get(profileName) && adapter.id === 'dsh-web') {
     await adapter.dispose?.();

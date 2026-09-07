@@ -140,6 +140,10 @@ export class LarkBridgeService extends Service {
       env,
       profileName: config.profile ?? 'default',
       allowOnboarding: true,
+      // Running as a plugin, so hand the bridge this host's context: the
+      // adapter drives dsh's agents directly rather than calling the web
+      // server this same process is serving.
+      hostContext: this.ctx,
       ...(deps.createChannel ? { createChannel: deps.createChannel } : {}),
       ...(deps.adapter ? { adapter: deps.adapter } : {}),
     })
@@ -212,7 +216,8 @@ export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) 
         if (!isDisabled(desired)) {
           const engine = await service.start(desired, deps);
           ctx.logger.info(
-            `[dsh-lark-bot] bridge engine running (profile=${engine.profile}, home=${engine.home})`,
+            `[dsh-lark-bot] bridge engine running (profile=${engine.profile}, ` +
+              `home=${engine.home}, adapter=${engine.status().adapterId})`,
           );
         }
         appliedConfig = desired;

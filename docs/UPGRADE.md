@@ -259,3 +259,37 @@ profile 里不再安装。
 
 修改：把这些服务声明为 session-manager 的 `inject` 集合，交给 cordis 等到
 服务就绪后再激活。
+
+## 从 HTTP 改为进程内驱动（方案 B）
+
+上面 5 条破坏点里有 3 条（强制认证、RPC 改名、事件端点改名）都只影响一件事：
+**桥接通过 loopback HTTP 调用它自己所在的那个进程。**
+
+作为 dsh 插件运行时，本桥接和 Web UI 在同一个进程里，却绕道网络去调用本机
+Web 服务，等于把宿主的整个 HTTP 协议面纳入自己的兼容负担。改为直接使用
+进程内服务后，这三条全部不再适用。
+
+| 能力 | 原先（HTTP） | 现在（进程内） |
+| :--- | :--- | :--- |
+| 建会话 | `POST /api/session.create` | `ctx.agents.create()` |
+| 发消息 | `POST /api/session.prompt` | `agent.followup()` |
+| 事件流 | `ws /api/events.mux` | `ctx.on('session/event')` |
+| 续接会话 | 依赖服务端状态 | `ctx.agents.get()` / `resume()` |
+| 中止 | RPC | `agent.cancel({ kind: 'user' })` |
+
+`DSH_LARK_ADAPTER=web`（默认）在作为插件运行时会自动使用进程内传输；独立
+CLI 运行时仍走 HTTP。`host` 表示强制进程内，缺少宿主时直接报错而不是静默
+降级。`sdk` / `acp` / `headless` 保持不变。
+
+传输选择只看「是否拿到宿主 context」，不去探测 agent 注册表：服务在启动过程中
+才逐个就绪，一次性探测可能因竞态而静默退回 HTTP。而一个没有 agent 注册表的
+dsh 宿主同样无法通过自己的 Web API 提供会话，所以没有可退回的目标——这种情况
+由 `HostServices` 抛出可操作的错误。
+
+启动日志会打印实际选中的传输：
+
+```text
+[dsh-lark-bot] bridge engine running (profile=..., home=..., adapter=dsh-host)
+```
+
+`adapter=dsh-host` 表示进程内，`adapter=dsh-web` 表示仍走 HTTP。
