@@ -1353,8 +1353,14 @@ async function handleSessionProjection(args: string, ctx: CommandContext): Promi
   if (!ctx.sessionProjection) {
     await reply(
       ctx,
-      '当前 adapter 未提供 DSH session 投影；请使用 `web` adapter 并确认 Web host 可用。',
-      'The current adapter does not provide DSH session projection; use the `web` adapter and ensure the Web host is reachable.',
+      '当前 adapter 不提供 DSH session 投影。session 管理需要 DSH 自己的会话：'
+        + '把桥接作为插件跑在 dsh 里（默认，DSH_LARK_ADAPTER=web/host），'
+        + '或指向一个可访问的 dsh web。sdk / acp / headless 各自驱动独立 runtime，没有可投影的 DSH session 列表。',
+      'The current adapter does not provide DSH session projection. Session '
+        + 'management needs the sessions dsh itself owns: run the bridge as a plugin '
+        + 'inside dsh (the default, DSH_LARK_ADAPTER=web/host), or point it at a '
+        + 'reachable dsh web. sdk / acp / headless each drive their own runtime and '
+        + 'have no dsh session list to project.',
     );
     return;
   }

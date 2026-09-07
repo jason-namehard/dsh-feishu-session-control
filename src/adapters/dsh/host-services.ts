@@ -57,6 +57,36 @@ export interface HostAgent {
   whenIdle(): Promise<void>;
 }
 
+/** One persisted session header as `sessionPersistence.list()` returns it. */
+export interface HostSessionHeader {
+  readonly id: HostSessionId;
+  readonly cwd?: string;
+  readonly title?: string;
+  readonly updatedAt?: number;
+  readonly createdAt?: number;
+  readonly meta?: { readonly cwd?: string; readonly createdAt?: number; readonly title?: string };
+}
+
+/** One page of a session log, as `sessionPersistence.readFrom()` returns it. */
+export interface HostSessionLog {
+  readonly meta?: { readonly cwd?: string; readonly createdAt?: number };
+  readonly events?: readonly HostSessionEvent[];
+}
+
+interface HostSessionPersistence {
+  list(): Promise<readonly HostSessionHeader[]>;
+  readFrom(id: HostSessionId, fromSeq: number): Promise<HostSessionLog>;
+}
+
+interface HostSessionQuery {
+  readTitleSnapshot?(id: HostSessionId): Promise<{ title?: string } | undefined>;
+}
+
+interface HostSessionStore {
+  list(): Array<{ id: HostSessionId }>;
+  get(id: HostSessionId): unknown;
+}
+
 interface HostAgentRegistry {
   create(options: {
     sessionId: HostSessionId;
@@ -253,6 +283,62 @@ export class HostServices {
   async sessionId(raw: string): Promise<HostSessionId> {
     const { SessionId } = await this.factories();
     return SessionId(raw);
+  }
+
+  /**
+   * Every persisted session's header. Live-only `ctx.sessions.list()` is not
+   * enough for the Feishu session list: a session the user switched away from
+   * is still selectable, and is not live.
+   * @returns the headers, or an empty list when persistence is unavailable.
+   */
+  async sessionHeaders(): Promise<readonly HostSessionHeader[]> {
+    const persistence = service(this.ctx, 'sessionPersistence') as HostSessionPersistence | undefined;
+    if (!persistence || !isFn(persistence.list)) return [];
+    try {
+      return await persistence.list();
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Read one session's durable log.
+   * @param sessionId - the session to read.
+   * @param fromSeq - first event seq to include.
+   */
+  async readSessionLog(sessionId: HostSessionId, fromSeq = 0): Promise<HostSessionLog> {
+    const persistence = service(this.ctx, 'sessionPersistence') as HostSessionPersistence | undefined;
+    if (!persistence || !isFn(persistence.readFrom)) {
+      throw new Error('dsh session persistence is unavailable');
+    }
+    return persistence.readFrom(sessionId, fromSeq);
+  }
+
+  /**
+   * The session's projected title, when the query engine has one.
+   * @param sessionId - the session to look up.
+   */
+  async sessionTitle(sessionId: HostSessionId): Promise<string | undefined> {
+    const query = service(this.ctx, 'sessionQuery') as HostSessionQuery | undefined;
+    if (!query || !isFn(query.readTitleSnapshot)) return undefined;
+    try {
+      const snapshot = await query.readTitleSnapshot(sessionId);
+      const title = snapshot?.title?.trim();
+      return title === undefined || title === '' ? undefined : title;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Session ids the host currently holds live (used for the running flag). */
+  liveSessionIds(): Set<HostSessionId> {
+    const store = service(this.ctx, 'sessions') as HostSessionStore | undefined;
+    if (!store || !isFn(store.list)) return new Set();
+    try {
+      return new Set(store.list().map((session) => session.id));
+    } catch {
+      return new Set();
+    }
   }
 
   /**

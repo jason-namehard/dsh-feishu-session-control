@@ -55,6 +55,9 @@ import { prepareAttachments } from '../../media/attachments.js';
 import { SessionStore } from '../../session/store.js';
 import { SessionProjectionStore } from '../../session/projection-store.js';
 import { WebSessionProjectionSource } from '../../session/projection-protocol.js';
+import { HostSessionProjectionSource } from '../../session/host-projection.js';
+import { HostDshAdapter } from '../../adapters/dsh/host-adapter.js';
+import { HostServices } from '../../adapters/dsh/host-services.js';
 import { SessionAliasManager } from '../../session/alias-manager.js';
 import { archiveScopeSlug, SessionArchive } from '../../session/archive.js';
 import { GitWorktreeManager } from '../../workspace/git-worktree.js';
@@ -325,6 +328,21 @@ export async function startBridgeEngine(
       );
     });
   }
+  // Which projection source can serve /sessions, /use, /delete and /purge.
+  // The in-process adapter reads the host services directly; the HTTP web
+  // adapter keeps its wire-protocol facade. Any other adapter (sdk, acp,
+  // headless) drives its own runtime and has no dsh session list to project,
+  // which is what the "adapter does not provide session projection" reply
+  // means.
+  const hostContext = options.hostContext;
+  const projectionSource = adapter instanceof HostDshAdapter && hostContext !== undefined
+    ? new HostSessionProjectionSource(
+        new HostServices(hostContext),
+        { baseUrl: env.webBaseUrl },
+      )
+    : adapter instanceof WebDshAdapter
+      ? new WebSessionProjectionSource(adapter)
+      : undefined;
   const activeRuns = new ActiveRuns();
   const runPolicies = new RunPolicyStore();
   const concurrencyStore = new ConcurrencyStore();
@@ -724,10 +742,10 @@ export async function startBridgeEngine(
     handoffGuard,
     channelUpdates,
     jobs,
-    ...(env.sessionProjectionEnabled && adapter instanceof WebDshAdapter
+    ...(env.sessionProjectionEnabled && projectionSource
       ? {
           sessionProjectionStore: sessionProjections,
-          sessionProjectionSource: new WebSessionProjectionSource(adapter),
+          sessionProjectionSource: projectionSource,
           sessionProjectionLimits: {
             backfillMessages: env.sessionBackfillMessages,
             backfillBytes: env.sessionBackfillBytes,
@@ -760,7 +778,7 @@ export async function startBridgeEngine(
           allowedChats: activeProfile.access.allowedChats.length,
           admins: activeProfile.access.admins.length,
           groupNoAt: env.groupNoAt,
-          sessionProjectionEnabled: env.sessionProjectionEnabled && adapter instanceof WebDshAdapter,
+          sessionProjectionEnabled: env.sessionProjectionEnabled && projectionSource !== undefined,
           projectionBindings: sessionProjections.list().length,
         },
         request,

@@ -99,3 +99,31 @@ im:message.reactions:write_only    发送、删除消息表情回复
 最终答案目前是渲染在那张流式卡片里的。直接把卡片摘掉、只留表情，有可能把
 结论一起弄丢——那是最坏的结果。所以先把表情能力单独做完并测好，再改运行
 流程的呈现方式，确保结论有独立的投递路径。
+
+## session 命令的数据来源（进程内）
+
+`/sessions`、`/use`、`/delete`、`/purge` 需要 DSH 自己的会话列表。作为插件跑在
+dsh 里时，这些数据直接从宿主服务读，不再走它自己的 HTTP API：
+
+| 能力 | 来源 |
+| :--- | :--- |
+| 会话列表 | `sessionPersistence.list()`（含未 live 的会话） |
+| 标题补全 | `sessionQuery.readTitleSnapshot()` |
+| 运行中标记 | `ctx.sessions.list()` |
+| 历史回填 | `sessionPersistence.readFrom()` |
+| 实时事件 | `ctx.on('session/event')` |
+| 发消息 | `agent.followup()` |
+| 新建会话 | `ctx.agents.create()` |
+| 回收站 / 彻底删除 | 本项目自己注册的 `/__chameleon/session/{delete,purge}` |
+
+最后一行是刻意的例外：这两个路由不在 `/api` 前缀下，不受 dsh 的浏览器认证围栏
+影响，在 0.1.2-rc.1 上依然可用；而回收站索引、墓碑记录和路径安全检查都集中在
+`src/integrated/session-manager`，没必要再实现第二份。
+
+只列 live 会话是不够的——用户切走的会话仍然可选，但已经不 live 了，所以列表以
+持久化层的 header 为准。
+
+回收站读不到时按空处理：丢掉一个 trashed 标记是可恢复的，把整个列表打空不是。
+
+实测：DSH 启动后 `session-projection` 记录 `mux-connected`，无任何错误；此前这个
+category 每 5 秒刷一次 `web mux websocket connection failed`。
