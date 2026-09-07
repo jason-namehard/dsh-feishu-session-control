@@ -351,6 +351,43 @@ export function adaptLarkChannel(channel: LarkChannel): StreamingChannel {
     async recallMessage(messageId) {
       await channel.recallMessage(messageId);
     },
+    async addReaction(messageId, emoji) {
+      // Needs the "add message reaction" scope (im:message.reaction:write).
+      // Treated as best-effort: an acknowledgement is worth less than the run
+      // it precedes, so a missing scope must never fail the turn — the caller
+      // falls back to its normal progress reporting.
+      try {
+        const response = await channel.rawClient.im.v1.messageReaction.create({
+          path: { message_id: messageId },
+          data: { reaction_type: { emoji_type: emoji } },
+        });
+        if (response.code !== undefined && response.code !== 0) {
+          log.warn('lark-reaction', 'add-rejected', {
+            code: response.code,
+            message: response.msg ?? 'unknown error',
+          });
+          return undefined;
+        }
+        return response.data?.reaction_id;
+      } catch (error) {
+        log.warn('lark-reaction', 'add-failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      }
+    },
+    async removeReaction(messageId, reactionId) {
+      try {
+        await channel.rawClient.im.v1.messageReaction.delete({
+          path: { message_id: messageId, reaction_id: reactionId },
+        });
+      } catch (error) {
+        // A reaction that cannot be cleared is cosmetic residue, not a failure.
+        log.warn('lark-reaction', 'remove-failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
     async createChat(opts) {
       return channel.createChat(opts);
     },
