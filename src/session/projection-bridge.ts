@@ -7,13 +7,13 @@ import {
 } from '../card/session-projection-card.js';
 import { log } from '../core/logger.js';
 import {
-  decodeMuxEvent,
   isRecord,
   textContent,
   type DshSessionEvent,
   type DshSessionSummary,
   type SessionPurgeResult,
   type SessionTrashResult,
+  type SessionEventStream,
   type SessionProjectionSource,
 } from './projection-protocol.js';
 import type {
@@ -73,7 +73,7 @@ export class SessionProjectionBridge {
   private readonly streams = new Map<string, StreamBuffer>();
   private readonly activeTurns = new Map<string, string>();
   private readonly feishuTurns = new Set<string>();
-  private socket: WebSocket | undefined;
+  private stream: SessionEventStream | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private closed = true;
 
@@ -101,8 +101,8 @@ export class SessionProjectionBridge {
     this.closed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
-    try { this.socket?.close(); } catch { /* best effort */ }
-    this.socket = undefined;
+    try { this.stream?.close(); } catch { /* best effort */ }
+    this.stream = undefined;
     await Promise.allSettled([...this.queues.values()]);
     await this.deps.store.flush();
   }
@@ -248,15 +248,8 @@ export class SessionProjectionBridge {
   private async connect(): Promise<void> {
     if (this.closed) return;
     try {
-      const socket = await this.deps.source.openMux();
-      if (this.closed) {
-        socket.close();
-        return;
-      }
-      this.socket = socket;
-      socket.addEventListener('message', (frame: { data: unknown }) => {
-        const decoded = decodeMuxEvent(String(frame.data));
-        if (!decoded || !this.deps.store.ownerOf(decoded.sessionId)) return;
+      const stream = await this.deps.source.openEvents((decoded) => {
+        if (!this.deps.store.ownerOf(decoded.sessionId)) return;
         void this.serial(decoded.sessionId, async () => {
           const binding = this.deps.store.ownerOf(decoded.sessionId);
           if (!binding) return;
@@ -272,15 +265,22 @@ export class SessionProjectionBridge {
           log.fail('session-projection', error, {
             step: 'live-event', sessionId: decoded.sessionId, seq: decoded.event.seq,
           });
-          try { this.socket?.close(); } catch { /* reconnect below */ }
+          // Drop the feed so `connect()` rebuilds it from a clean baseline.
+          try { this.stream?.close(); } catch { /* reconnect below */ }
+          if (this.stream === stream) {
+            this.stream = undefined;
+            this.scheduleReconnect();
+          }
         });
       });
-      socket.addEventListener('close', () => {
-        if (this.socket === socket) this.socket = undefined;
+      if (this.closed) {
+        stream.close();
+        return;
+      }
+      this.stream = stream;
+      stream.onClose(() => {
+        if (this.stream === stream) this.stream = undefined;
         this.scheduleReconnect();
-      }, { once: true });
-      socket.addEventListener('error', () => {
-        log.warn('session-projection', 'mux-error', {});
       });
       for (const binding of this.deps.store.list()) {
         await this.serial(binding.sessionId, () => this.catchUp(binding));
@@ -288,8 +288,8 @@ export class SessionProjectionBridge {
       log.info('session-projection', 'mux-connected', { bindings: this.deps.store.list().length });
     } catch (error) {
       log.fail('session-projection', error, { step: 'connect' });
-      try { this.socket?.close(); } catch { /* best effort */ }
-      this.socket = undefined;
+      try { this.stream?.close(); } catch { /* best effort */ }
+      this.stream = undefined;
       this.scheduleReconnect();
     }
   }

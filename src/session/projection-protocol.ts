@@ -37,11 +37,44 @@ export interface SessionPurgeResult {
   purged: true;
 }
 
+/** One decoded live session event, already narrowed to a known session. */
+export interface SessionEventFrame {
+  sessionId: string;
+  event: DshSessionEvent;
+}
+
+/**
+ * A live feed of session events, independent of how it is carried.
+ *
+ * The projection bridge used to consume a `WebSocket` directly, which tied it
+ * to the web host's wire protocol: dsh 0.1.2-rc.1 both renamed that endpoint
+ * (`/api/events.mux` -> `/api/remote.mux`) and put the whole `/api` prefix
+ * behind mandatory cookie authentication that Node's built-in WebSocket cannot
+ * carry. Expressing the feed as a subscription instead lets the in-process
+ * host transport hand over `ctx.on('session/event', ...)` — no socket, no
+ * endpoint name, no authentication — while an out-of-process transport can
+ * still wrap a real socket.
+ */
+export interface SessionEventStream {
+  /** Stop delivering frames and release the carrier. Idempotent. */
+  close(): void;
+  /**
+   * Register the end-of-feed listener. Called at most once, and never after
+   * `close()`, so the bridge can distinguish a dropped carrier (reconnect)
+   * from its own shutdown.
+   */
+  onClose(listener: () => void): void;
+}
+
 export interface SessionProjectionSource {
   listSessions(): Promise<DshSessionSummary[]>;
   history(sessionId: string, options?: { beforeSeq?: number; maxMessages?: number }): Promise<DshHistoryPage>;
   prompt(sessionId: string, text: string, rpcId?: string): Promise<{ rpcId: string }>;
-  openMux(): Promise<WebSocket>;
+  /**
+   * Begin delivering live session events to `onFrame`.
+   * @param onFrame - receives every decoded frame; the bridge filters by binding.
+   */
+  openEvents(onFrame: (frame: SessionEventFrame) => void): Promise<SessionEventStream>;
   createSession?(cwd: string): Promise<string>;
   deleteSession?(sessionId: string): Promise<SessionTrashResult>;
   purgeSession?(sessionId: string): Promise<SessionPurgeResult>;
@@ -54,6 +87,35 @@ export interface WebProjectionTransport {
   deleteSession?(sessionId: string): Promise<SessionTrashResult>;
   purgeSession?(sessionId: string): Promise<SessionPurgeResult>;
   listTrashedSessionIds?(): Promise<Set<string>>;
+}
+
+/** Adapt one raw WebSocket carrier to the transport-neutral stream contract. */
+export function socketEventStream(
+  socket: WebSocket,
+  onFrame: (frame: SessionEventFrame) => void,
+): SessionEventStream {
+  let closedByUs = false;
+  let endListener: (() => void) | undefined;
+  socket.addEventListener('message', (frame: { data: unknown }) => {
+    const decoded = decodeMuxEvent(String(frame.data));
+    if (decoded) onFrame(decoded);
+  });
+  socket.addEventListener('close', () => {
+    if (!closedByUs) endListener?.();
+  }, { once: true });
+  return {
+    close: () => {
+      closedByUs = true;
+      try {
+        socket.close();
+      } catch {
+        // the carrier is going away either way
+      }
+    },
+    onClose: (listener) => {
+      endListener = listener;
+    },
+  };
 }
 
 /** Typed, validation-owning facade over the rc.8 Web host session RPCs. */
@@ -115,8 +177,8 @@ export class WebSessionProjectionSource implements SessionProjectionSource {
     return { rpcId };
   }
 
-  openMux(): Promise<WebSocket> {
-    return this.transport.openMux();
+  async openEvents(onFrame: (frame: SessionEventFrame) => void): Promise<SessionEventStream> {
+    return socketEventStream(await this.transport.openMux(), onFrame);
   }
 
   async createSession(cwd: string): Promise<string> {

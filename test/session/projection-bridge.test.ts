@@ -4,10 +4,13 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ScopeDirectory } from '../../src/bridge/scope-directory.js';
 import { SessionProjectionBridge } from '../../src/session/projection-bridge.js';
+import { socketEventStream } from '../../src/session/projection-protocol.js';
 import type {
   DshHistoryPage,
   DshSessionEvent,
   DshSessionSummary,
+  SessionEventFrame,
+  SessionEventStream,
   SessionProjectionSource,
 } from '../../src/session/projection-protocol.js';
 import { SessionProjectionStore } from '../../src/session/projection-store.js';
@@ -39,10 +42,12 @@ class FakeSource implements SessionProjectionSource {
     return { events: structuredClone(selected), hasMore: selected.length < eligible.length };
   }
   async prompt(_sessionId: string, _text: string, rpcId: string = 'rpc'): Promise<{ rpcId: string }> { return { rpcId }; }
-  async openMux(): Promise<WebSocket> {
+  async openEvents(onFrame: (frame: SessionEventFrame) => void): Promise<SessionEventStream> {
     const socket = new FakeSocket();
     this.sockets.push(socket);
-    return socket as unknown as WebSocket;
+    // Go through the real socket adapter so these tests also cover the
+    // WebSocket-to-stream bridge, not just the neutral contract.
+    return socketEventStream(socket as unknown as WebSocket, onFrame);
   }
 }
 
