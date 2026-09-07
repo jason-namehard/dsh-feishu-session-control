@@ -52,6 +52,13 @@ export interface RuntimeEnv {
   archiveMaxAgeDays: number;
   accessDefaultDeny: boolean;
   eventFreshnessMs: number;
+  /**
+   * Whether Feishu shows the agent's reasoning phase. Off by default: on a
+   * phone the reasoning stream is noise between the request and the answer,
+   * and the in-process transport surfaces reasoning-delta chunks that the old
+   * HTTP transport never delivered.
+   */
+  showThinking: boolean;
   /** Bridge engine heartbeat interval (guardian liveness signal), default 5000. */
   heartbeatMs: number;
   /** Guardian disabled switch (DSH_LARK_GUARDIAN_DISABLED=1 keeps it stopped). */
@@ -344,6 +351,7 @@ export function loadRuntimeEnv(
     ),
     accessDefaultDeny: parseBoolean(source.DSH_LARK_ACCESS_DEFAULT_DENY, false),
     eventFreshnessMs: parseFreshness(source.DSH_LARK_EVENT_FRESHNESS_MS),
+    showThinking: source.DSH_LARK_SHOW_THINKING === '1',
     heartbeatMs: parsePositiveIntMin(
       source.DSH_LARK_HEARTBEAT_MS,
       DEFAULTS.heartbeatMs,

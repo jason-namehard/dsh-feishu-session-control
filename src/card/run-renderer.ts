@@ -32,7 +32,9 @@ function footerStatus(
 ): object {
   const zh = locale === 'zh_cn';
   let text =
-    status === 'thinking'
+    status === 'working'
+      ? zh ? '⏳ 正在处理' : '⏳ Working'
+      : status === 'thinking'
       ? zh ? '🧠 正在思考' : '🧠 Thinking'
       : status === 'tool_running'
         ? zh ? '🧰 正在调用工具' : '🧰 Running tools'

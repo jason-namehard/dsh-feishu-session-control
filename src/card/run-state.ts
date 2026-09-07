@@ -14,7 +14,13 @@ export type Block =
   | { kind: 'text'; content: string; streaming: boolean }
   | { kind: 'tool'; tool: ToolEntry };
 
-export type FooterStatus = 'thinking' | 'tool_running' | 'streaming' | null;
+/**
+ * `working` is the neutral "busy, nothing to show yet" phase. It is distinct
+ * from `thinking`, which claims the agent is reasoning and is only reached when
+ * reasoning display is switched on — the phone should not be told about a
+ * deliberation phase it was asked not to show.
+ */
+export type FooterStatus = 'working' | 'thinking' | 'tool_running' | 'streaming' | null;
 export type Terminal = 'running' | 'done' | 'interrupted' | 'error' | 'idle_timeout';
 
 export interface RunState {
@@ -45,7 +51,7 @@ export const initialState: RunState = {
   blocks: [],
   reasoning: { content: '', active: false },
   usage: undefined,
-  footer: 'thinking',
+  footer: 'working',
   terminal: 'running',
   errorMsg: undefined,
   finalDeliveryError: undefined,
@@ -165,7 +171,7 @@ export function reduce(state: RunState, event: AgentEvent): RunState {
     case 'tool_result':
       return {
         ...state,
-        footer: 'thinking',
+        footer: 'working',
         blocks: state.blocks.map((block) => {
           if (block.kind !== 'tool' || block.tool.id !== event.id) return block;
           return {

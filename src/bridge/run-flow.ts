@@ -103,6 +103,8 @@ export interface RunFlowInput {
    * as an independent bubble (issue #95). Defaults to `INTERIM_BUBBLE_PAUSE_MS`.
    */
   interimDebounceMs?: number;
+  /** Show the agent's reasoning phase in Feishu (default off). */
+  showThinking?: boolean;
   /** Visible member identity when the group uses member-isolated scopes. */
   scopeOwner?: string;
   /** Trusted peer identities available for an explicit lark_notify handoff. */
@@ -433,7 +435,13 @@ async function runAttempt(
               await showResumeRecovery(event.message);
               return;
             }
-            state = applyEvent(state, event, stopRequested);
+            // Reasoning is deliberately not projected to Feishu unless asked
+            // for: the phone wants the answer, not the deliberation. The event
+            // still refreshes activity, so a long reasoning phase is never
+            // mistaken for an idle run by the no-activity watchdog.
+            if (event.type !== 'thinking' || input.showThinking === true) {
+              state = applyEvent(state, event, stopRequested);
+            }
             state = { ...state, lastActivityMs: Date.now() };
             // Self-heal: a broken-session error must not destroy the log. Only
             // genuinely corrupt logs (seq gap / unparsable) are archived; the

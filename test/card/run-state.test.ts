@@ -76,6 +76,8 @@ describe('run state reducer', () => {
         },
       },
     ]);
-    expect(state.footer).toBe('thinking');
+    // Back to the neutral busy phase after a tool, not a claim that the agent
+    // is reasoning: reasoning is only ever announced when explicitly enabled.
+    expect(state.footer).toBe('working');
   });
 });

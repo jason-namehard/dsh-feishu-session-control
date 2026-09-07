@@ -148,6 +148,47 @@ describe('runAgentBatch', () => {
     expect(JSON.stringify(checkpoints)).not.toContain('secret');
   });
 
+  it('keeps the reasoning phase out of the Feishu card by default', async () => {
+    const feishu = makeChannel();
+    const outcome = await runAgentBatch({
+      scope: 'chat-quiet', chatId: 'chat-quiet', messages: ['do work'],
+      adapter: fakeAdapter([
+        { type: 'system', sessionId: 'session-quiet', cwd: '/tmp/project', model: 'm' },
+        { type: 'thinking', delta: 'deliberating at length' },
+        { type: 'final_text', content: 'the answer' },
+        { type: 'done', sessionId: 'session-quiet', terminationReason: 'normal' },
+      ]),
+      sessions: new SessionStore(':memory:'), workspaces: new WorkspaceStore(':memory:'),
+      activeRuns: new ActiveRuns(), channel: feishu.channel, defaultWorkspace: '/tmp/project',
+    });
+
+    expect(outcome).toBe('completed');
+    const rendered = JSON.stringify(feishu.updates) + JSON.stringify(feishu.messages);
+    expect(rendered).not.toContain('deliberating at length');
+    // The phone is told the run is working, never that it is "thinking".
+    expect(rendered).not.toContain('正在思考');
+    // Suppressing the phase must not cost the answer.
+    expect(rendered).toContain('the answer');
+  });
+
+  it('shows the reasoning phase when explicitly opted in', async () => {
+    const feishu = makeChannel();
+    await runAgentBatch({
+      scope: 'chat-verbose', chatId: 'chat-verbose', messages: ['do work'],
+      showThinking: true,
+      adapter: fakeAdapter([
+        { type: 'system', sessionId: 'session-verbose', cwd: '/tmp/project', model: 'm' },
+        { type: 'thinking', delta: 'deliberating at length' },
+        { type: 'final_text', content: 'the answer' },
+        { type: 'done', sessionId: 'session-verbose', terminationReason: 'normal' },
+      ]),
+      sessions: new SessionStore(':memory:'), workspaces: new WorkspaceStore(':memory:'),
+      activeRuns: new ActiveRuns(), channel: feishu.channel, defaultWorkspace: '/tmp/project',
+    });
+
+    expect(JSON.stringify(feishu.updates)).toContain('正在思考');
+  });
+
   it('does not abandon a live run when checkpoint persistence is temporarily unavailable', async () => {
     const activeRuns = new ActiveRuns();
     const outcome = await runAgentBatch({
