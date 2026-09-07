@@ -106,9 +106,81 @@ export function hostServicesAvailable(ctx: HostContextLike | undefined): boolean
   return ctx !== undefined && asRegistry(service(ctx, 'agents')) !== undefined;
 }
 
+/**
+ * dsh's own message/identity factories, loaded from the host at runtime.
+ *
+ * These are deliberately NOT package dependencies. dsh core packages carry
+ * module-level identity (the compatibility notes call out the duplicated
+ * scheduler Symbol), so installing a second copy alongside the host's would be
+ * worse than not having them: the bridge would build messages with a different
+ * module instance than the agent validating them. Resolving them from the
+ * running host guarantees one copy, and the dynamic import keeps this file
+ * loadable where they do not exist at all.
+ */
+export interface HostFactories {
+  createUserMessage(input: {
+    content: ReadonlyArray<{ type: 'text'; text: string }>;
+    source: { kind: 'user' };
+  }): unknown;
+  SessionId(id: string): HostSessionId;
+}
+
+let factoriesPromise: Promise<HostFactories> | undefined;
+
+/**
+ * Load dsh's factories from the running host.
+ *
+ * Exported so callers that already hold them — or tests, which run with no
+ * host present at all — can supply them instead of reaching for a module that
+ * only exists inside dsh.
+ */
+export async function loadHostFactories(): Promise<HostFactories> {
+  factoriesPromise ??= (async () => {
+    // Indirect specifiers on purpose: these packages are resolved from the
+    // running host, so they must stay a runtime concern. A literal specifier
+    // would make the compiler demand a dependency we must not declare.
+    const llmSpecifier = '@deepseek-ai/dsh-llm';
+    const sessionSpecifier = '@deepseek-ai/dsh-session';
+    const load = (specifier: string): Promise<Partial<HostFactories>> =>
+      import(specifier) as Promise<Partial<HostFactories>>;
+    const [llm, session] = await Promise.all([
+      load(llmSpecifier),
+      load(sessionSpecifier),
+    ]);
+    if (!isFn(llm.createUserMessage) || !isFn(session.SessionId)) {
+      throw new Error('dsh message factories are missing from the host');
+    }
+    return {
+      createUserMessage: llm.createUserMessage,
+      SessionId: session.SessionId,
+    } as HostFactories;
+  })().catch((error: unknown) => {
+    // Do not cache a transient failure as a permanent one.
+    factoriesPromise = undefined;
+    throw new Error(
+      `dsh in-process message factories unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  });
+  return factoriesPromise;
+}
+
 /** Typed, validation-owning facade over the in-process host services. */
 export class HostServices {
-  constructor(private readonly ctx: HostContextLike) {}
+  private readonly factories: () => Promise<HostFactories>;
+
+  /**
+   * @param ctx - the context this plugin is mounted on.
+   * @param factories - override for dsh's message/identity factories; defaults
+   *   to loading them from the running host.
+   */
+  constructor(
+    private readonly ctx: HostContextLike,
+    factories: (() => Promise<HostFactories>) | undefined = undefined,
+  ) {
+    this.factories = factories ?? loadHostFactories;
+  }
 
   private registry(): HostAgentRegistry {
     const registry = asRegistry(service(this.ctx, 'agents'));
@@ -160,6 +232,27 @@ export class HostServices {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Build one identified user message through the host's own factory.
+   * @param text - the user's prompt text, already stripped of bridge preamble.
+   */
+  async userMessage(text: string): Promise<unknown> {
+    const { createUserMessage } = await this.factories();
+    return createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind: 'user' },
+    });
+  }
+
+  /**
+   * Mint a fresh session identity through the host's own brand function.
+   * @param raw - the unbranded identity to adopt.
+   */
+  async sessionId(raw: string): Promise<HostSessionId> {
+    const { SessionId } = await this.factories();
+    return SessionId(raw);
   }
 
   /**
