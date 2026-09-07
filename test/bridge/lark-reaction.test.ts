@@ -47,7 +47,7 @@ describe('Feishu message reactions', () => {
   });
 
   it('does not fail the turn when the app lacks the reaction scope', async () => {
-    // A missing im:message.reaction:write scope comes back as a non-zero code.
+    // A missing im:message.reactions:write_only scope comes back as a non-zero code.
     // An acknowledgement is worth less than the run it precedes, so this must
     // degrade to "no reaction" rather than take the run down with it.
     const channel = adaptLarkChannel(fakeChannel({

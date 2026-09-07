@@ -78,11 +78,17 @@ Web 管理器采用三层生命周期：
 表情回复要一个额外权限，请在飞书开放平台为该应用开启：
 
 ```text
-im:message.reaction:write
+im:message.reactions:write_only    发送、删除消息表情回复
 ```
 
-路径：开放平台 → 你的应用 → 权限管理 → 搜索「表情回复」→ 勾选「添加消息的
-表情回复」→ 发布版本并等待生效。
+路径：开放平台 → 你的应用 → 权限管理 → 搜索「表情回复」→ 勾选「发送、删除
+消息表情回复」→ 发布版本并等待生效。
+
+注意权限码是复数 `reactions` 且后缀是 `write_only`，不是 `reaction:write`。
+
+已实测（2026-09-07，真实应用凭据 + 真实会话）：拿 tenant token、列消息、
+`POST /im/v1/messages/{id}/reactions` 加表情、`DELETE .../reactions/{rid}`
+删表情，四步全部返回 `code=0`。测试用的表情已清理。
 
 没开也不会坏：`addReaction` 是 best-effort，权限不足时飞书返回非零 code，
 桥接只记一条 warn 日志并退回原来的进度提示，不会让这一轮任务失败。这一点

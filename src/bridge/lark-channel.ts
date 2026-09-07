@@ -352,7 +352,7 @@ export function adaptLarkChannel(channel: LarkChannel): StreamingChannel {
       await channel.recallMessage(messageId);
     },
     async addReaction(messageId, emoji) {
-      // Needs the "add message reaction" scope (im:message.reaction:write).
+      // Needs the "add message reaction" scope (im:message.reactions:write_only).
       // Treated as best-effort: an acknowledgement is worth less than the run
       // it precedes, so a missing scope must never fail the turn — the caller
       // falls back to its normal progress reporting.
