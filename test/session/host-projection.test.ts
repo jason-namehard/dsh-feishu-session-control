@@ -63,15 +63,14 @@ function stubFetch(handler: (url: string) => { status?: number; body: unknown })
 }
 
 describe('HostSessionProjectionSource', () => {
-  it('lists persisted sessions newest first, marking live and trashed ones', async () => {
-    stubFetch(() => ({ body: { items: [{ sessionId: 's-old' }] } }));
-    const { services } = fakeServices({
-      headers: [
-        { id: 's-old', cwd: '/repo', title: 'older work', updatedAt: 100 },
-        { id: 's-new', cwd: '/repo', title: 'newer work', updatedAt: 300 },
-      ],
-      live: ['s-new'],
-    });
+  it('lists sessions newest first, marking live and trashed ones', async () => {
+    stubFetch((url) => url.includes('/trash/list')
+      ? { body: { items: [{ sessionId: 's-old' }] } }
+      : { body: { items: [
+          { sessionId: 's-old', workspacePath: '/repo', title: 'older work', createdAt: 100 },
+          { sessionId: 's-new', workspacePath: '/repo', title: 'newer work', createdAt: 300 },
+        ] } });
+    const { services } = fakeServices({ live: ['s-new'] });
 
     const list = await new HostSessionProjectionSource(services, endpoints).listSessions();
 
@@ -83,25 +82,30 @@ describe('HostSessionProjectionSource', () => {
     expect(list[1]).toMatchObject({ running: false, trashed: true });
   });
 
-  it('falls back to the projected title when the header has none', async () => {
-    stubFetch(() => ({ body: { items: [] } }));
-    const { services } = fakeServices({
-      headers: [{ id: 's1', updatedAt: 5 }],
-      titles: { s1: 'folded from the log' },
-    });
+  it('carries the workspace path, without which no session is selectable', async () => {
+    // The chooser matches a session to the chat by exact cwd, so a summary
+    // with no cwd silently drops out of /use, /delete and /purge.
+    stubFetch((url) => url.includes('/trash/list')
+      ? { body: { items: [] } }
+      : { body: { items: [
+          { sessionId: 's1', workspacePath: '/repo', title: 'named in the Web UI', createdAt: 5 },
+        ] } });
+    const { services } = fakeServices();
 
     const [summary] = await new HostSessionProjectionSource(services, endpoints).listSessions();
 
-    expect(summary).toMatchObject({ title: 'folded from the log', blank: false });
+    // The same name the Web UI shows, so both surfaces agree.
+    expect(summary).toMatchObject({ cwd: '/repo', title: 'named in the Web UI', blank: false });
   });
 
   it('keeps listing sessions when the recycle bin cannot be read', async () => {
     // An unreadable bin must not blank the session list: losing the trashed
     // marker is recoverable, losing the whole list is not.
-    stubFetch(() => {
-      throw new Error('trash index locked');
+    stubFetch((url) => {
+      if (url.includes('/trash/list')) throw new Error('trash index locked');
+      return { body: { items: [{ sessionId: 's1', workspacePath: '/repo', title: 't', createdAt: 1 }] } };
     });
-    const { services } = fakeServices({ headers: [{ id: 's1', updatedAt: 1, title: 't' }] });
+    const { services } = fakeServices();
 
     const list = await new HostSessionProjectionSource(services, endpoints).listSessions();
 

@@ -80,32 +80,60 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
     private readonly endpoints: HostProjectionEndpoints,
   ) {}
 
+  /**
+   * The session list, read from this bridge's own `/archived-sessions/sessions`
+   * route rather than assembled here.
+   *
+   * That route is what the browser Settings panels already use, so Feishu and
+   * the Web UI show the same name for the same session — which is the point:
+   * a list of opaque ids is unusable for picking a conversation on a phone.
+   * It also carries `workspacePath`, and the chooser matches a session to the
+   * chat by exact cwd; the persistence headers alone do not always have one,
+   * and a session with no cwd silently becomes unselectable, which is how
+   * /use, /delete and /purge all came to fail.
+   */
   async listSessions(): Promise<DshSessionSummary[]> {
-    const [headers, trashed] = await Promise.all([
-      this.services.sessionHeaders(),
+    const [items, trashed] = await Promise.all([
+      this.fetchSessionItems(),
       this.listTrashedSessionIds(),
     ]);
     const live = this.services.liveSessionIds();
-    const summaries = await Promise.all(headers.map(async (header) => {
-      const sessionId = String(header.id);
-      const cwd = header.cwd ?? header.meta?.cwd;
-      const title = header.title?.trim() || (await this.services.sessionTitle(sessionId));
-      const updatedAt = header.updatedAt ?? header.createdAt ?? header.meta?.createdAt ?? 0;
-      const summary: DshSessionSummary = {
-        sessionId,
-        updatedAt,
-        running: live.has(sessionId),
-        // A session with no title and no recorded work is a blank shell the
-        // chooser should not offer as a resumable conversation.
-        blank: title === undefined && updatedAt === 0,
-        ...(cwd === undefined ? {} : { cwd }),
-        ...(title === undefined ? {} : { title }),
-        ...(trashed.has(sessionId) ? { trashed: true } : {}),
-      };
-      return summary;
-    }));
-    // Newest first: the chooser and the aliases both read better that way.
-    return summaries.sort((a, b) => b.updatedAt - a.updatedAt);
+    return items
+      .map((item) => {
+        const sessionId = typeof item.sessionId === 'string' ? item.sessionId : undefined;
+        if (sessionId === undefined) return undefined;
+        const title = typeof item.title === 'string' && item.title.trim() !== ''
+          ? item.title.trim()
+          : undefined;
+        const cwd = typeof item.workspacePath === 'string' ? item.workspacePath : undefined;
+        const updatedAt = typeof item.updatedAt === 'number'
+          ? item.updatedAt
+          : typeof item.createdAt === 'number' ? item.createdAt : 0;
+        const summary: DshSessionSummary = {
+          sessionId,
+          updatedAt,
+          running: live.has(sessionId),
+          // Untitled and never used: a shell the chooser should not offer.
+          blank: title === undefined && updatedAt === 0,
+          ...(cwd === undefined ? {} : { cwd }),
+          ...(title === undefined ? {} : { title }),
+          ...(trashed.has(sessionId) ? { trashed: true } : {}),
+        };
+        return summary;
+      })
+      .filter((summary): summary is DshSessionSummary => summary !== undefined)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  private async fetchSessionItems(): Promise<Array<Record<string, unknown>>> {
+    const response = await fetch(`${this.endpoints.baseUrl}/archived-sessions/sessions`, {
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = (await response.json()) as { items?: unknown };
+    if (!response.ok || !Array.isArray(body.items)) {
+      throw new Error(`session listing failed: HTTP ${response.status}`);
+    }
+    return body.items as Array<Record<string, unknown>>;
   }
 
   async history(
