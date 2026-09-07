@@ -82,15 +82,26 @@ interface HostSessionQuery {
   readTitleSnapshot?(id: HostSessionId): Promise<{ title?: string } | undefined>;
 }
 
+interface HostDefaultModel {
+  currentSelection(): { provider?: string; model?: string } | undefined;
+}
+
 interface HostSessionStore {
   list(): Array<{ id: HostSessionId }>;
   get(id: HostSessionId): unknown;
+}
+
+/** Per-agent route. dsh resolves prompt variables such as `{{model}}` from it. */
+export interface HostAgentOptions {
+  provider?: string;
+  model?: string;
 }
 
 interface HostAgentRegistry {
   create(options: {
     sessionId: HostSessionId;
     meta?: { cwd?: string };
+    agentOptions?: HostAgentOptions;
   }): Promise<{ agent: HostAgent; dispose(): Promise<void> }>;
   resume(options: {
     resumeSessionId: HostSessionId;
@@ -244,13 +255,40 @@ export class HostServices {
 
   /**
    * Create a fresh session and its live agent.
+   *
+   * The route must be passed at creation: dsh resolves prompt variables from
+   * the agent's own options, so an agent created without one fails prompt
+   * assembly with `prompt variable "{{model}}" has no value` before it ever
+   * reaches the provider.
    * @param sessionId - identity to mint the session under.
    * @param cwd - validated absolute workspace path, when known.
+   * @param route - provider/model for this agent.
    */
-  async createAgent(sessionId: HostSessionId, cwd: string | undefined): Promise<HostAgent> {
+  async createAgent(
+    sessionId: HostSessionId,
+    cwd: string | undefined,
+    route: HostAgentOptions = {},
+  ): Promise<HostAgent> {
+    // Fall back to the host's own default route, which is what dsh's session
+    // controller does. The bridge often has no model of its own (an unset
+    // DSH_LARK_MODEL leaves it empty), and an agent created with no route at
+    // all cannot resolve `{{model}}` during prompt assembly.
+    // An unset DSH_LARK_MODEL surfaces as an empty string rather than
+    // undefined, and an empty model would override the host default with
+    // nothing — the exact shape that breaks prompt assembly.
+    const nonEmpty = (value: string | undefined): string | undefined =>
+      value === undefined || value.trim() === '' ? undefined : value;
+    const fallback = this.defaultRoute();
+    const provider = nonEmpty(route.provider) ?? nonEmpty(fallback.provider);
+    const model = nonEmpty(route.model) ?? nonEmpty(fallback.model);
+    const agentOptions: HostAgentOptions = {
+      ...(provider === undefined ? {} : { provider }),
+      ...(model === undefined ? {} : { model }),
+    };
     const { agent } = await this.registry().create({
       sessionId,
       ...(cwd === undefined ? {} : { meta: { cwd } }),
+      ...(Object.keys(agentOptions).length === 0 ? {} : { agentOptions }),
     });
     return agent;
   }
@@ -327,6 +365,24 @@ export class HostServices {
       return title === undefined || title === '' ? undefined : title;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * dsh's configured default provider/model.
+   * @returns the selection, or empty when the host exposes none.
+   */
+  defaultRoute(): HostAgentOptions {
+    const service_ = service(this.ctx, 'agentDefaultModel') as HostDefaultModel | undefined;
+    if (!service_ || !isFn(service_.currentSelection)) return {};
+    try {
+      const selection = service_.currentSelection();
+      return {
+        ...(selection?.provider === undefined ? {} : { provider: selection.provider }),
+        ...(selection?.model === undefined ? {} : { model: selection.model }),
+      };
+    } catch {
+      return {};
     }
   }
 

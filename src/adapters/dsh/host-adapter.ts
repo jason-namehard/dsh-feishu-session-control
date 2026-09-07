@@ -79,6 +79,7 @@ function createHostRun(
     sessionId: string | undefined;
     prompt: string;
     cwd: string | undefined;
+    provider: string | undefined;
     model: string | undefined;
   },
 ): HostRunHandle {
@@ -111,6 +112,10 @@ function createHostRun(
         agent = await services.createAgent(
           await services.sessionId(`session-${randomUUID()}`),
           options.cwd,
+          // Without a route dsh cannot resolve `{{model}}` while assembling the
+          // persona section, and the run fails before reaching the provider.
+          { ...(options.provider === undefined ? {} : { provider: options.provider }),
+            ...(options.model === undefined ? {} : { model: options.model }) },
         );
       }
       const sessionId = agent.id;
@@ -211,11 +216,13 @@ export class HostDshAdapter implements AgentAdapter {
   readonly resumeCapable = true;
 
   private readonly services: HostServices;
+  private readonly provider: string | undefined;
   private readonly model: string;
   private disposed = false;
 
   constructor(options: HostAdapterOptions) {
     this.services = new HostServices(options.ctx, options.factories);
+    this.provider = options.provider;
     this.model = options.model;
   }
 
@@ -251,6 +258,7 @@ export class HostDshAdapter implements AgentAdapter {
       sessionId: options.sessionId,
       prompt: options.prompt,
       cwd: options.cwd ?? process.cwd(),
+      provider: options.provider ?? this.provider,
       model: options.model ?? this.model,
     });
     return {

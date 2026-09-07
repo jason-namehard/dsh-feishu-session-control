@@ -338,7 +338,13 @@ export async function startBridgeEngine(
   const projectionSource = adapter instanceof HostDshAdapter && hostContext !== undefined
     ? new HostSessionProjectionSource(
         new HostServices(hostContext),
-        { baseUrl: env.webBaseUrl },
+        {
+          baseUrl: env.webBaseUrl,
+          ...(env.provider === undefined ? {} : { provider: env.provider }),
+          ...(activeProfile.preferences.model ?? env.model
+            ? { model: activeProfile.preferences.model ?? env.model }
+            : {}),
+        },
       )
     : adapter instanceof WebDshAdapter
       ? new WebSessionProjectionSource(adapter)

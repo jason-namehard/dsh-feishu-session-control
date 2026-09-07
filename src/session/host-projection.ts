@@ -22,6 +22,13 @@ import type {
  */
 export interface HostProjectionEndpoints {
   baseUrl: string;
+  /**
+   * Provider/model for sessions this source creates. dsh resolves prompt
+   * variables such as `{{model}}` from the agent's own options, so a session
+   * created without a route fails prompt assembly on its first turn.
+   */
+  provider?: string;
+  model?: string;
 }
 
 function asDshEvent(event: HostSessionEvent): DshSessionEvent | undefined {
@@ -144,6 +151,10 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
     const agent = await this.services.createAgent(
       await this.services.sessionId(`session-${randomUUID()}`),
       cwd,
+      {
+        ...(this.endpoints.provider === undefined ? {} : { provider: this.endpoints.provider }),
+        ...(this.endpoints.model === undefined ? {} : { model: this.endpoints.model }),
+      },
     );
     return agent.id;
   }

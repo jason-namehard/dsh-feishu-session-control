@@ -15,6 +15,7 @@ interface FakeEvent {
  */
 class FakeHost {
   created: string[] = [];
+  createdOptions: Array<Record<string, unknown> | undefined> = [];
   resumed: string[] = [];
   followups: unknown[] = [];
   cancels: unknown[] = [];
@@ -24,6 +25,8 @@ class FakeHost {
   live = new Set<string>();
   /** Session ids that exist on disk and may be resumed. */
   resumable = new Set<string>();
+  /** What the host reports as its configured default route. */
+  defaultRoute: { provider?: string; model?: string } = {};
 
   private agent(id: string): Record<string, unknown> {
     return {
@@ -42,10 +45,17 @@ class FakeHost {
   } {
     return {
       get: (name: string) => {
+        if (name === 'agentDefaultModel') {
+          return { currentSelection: () => this.defaultRoute };
+        }
         if (name !== 'agents') return undefined;
         return {
-          create: async ({ sessionId }: { sessionId: string }) => {
+          create: async ({ sessionId, agentOptions }: {
+            sessionId: string;
+            agentOptions?: Record<string, unknown>;
+          }) => {
             this.created.push(sessionId);
+            this.createdOptions.push(agentOptions);
             this.live.add(sessionId);
             return { agent: this.agent(sessionId), dispose: async () => undefined };
           },
@@ -92,10 +102,10 @@ const fakeFactories = async (): Promise<{
   SessionId: (id) => id,
 });
 
-function adapterFor(host: FakeHost): HostDshAdapter {
+function adapterFor(host: FakeHost, provider?: string): HostDshAdapter {
   return new HostDshAdapter({
     ctx: host.ctx,
-    provider: undefined,
+    provider,
     model: 'test-model',
     factories: fakeFactories,
   });
@@ -171,6 +181,76 @@ describe('HostDshAdapter', () => {
     // The listener must be released once the turn settles.
     expect(host.unsubscribed).toBe(1);
     expect(host.listeners).toEqual([]);
+  });
+
+  it('creates the agent with a provider/model route', async () => {
+    // dsh resolves prompt variables from the agent's own options. Creating one
+    // without a route fails prompt assembly with
+    // `prompt variable "{{model}}" has no value` before the provider is ever
+    // reached — a failure that looks like a model problem, not a missing field.
+    const host = new FakeHost();
+    const run = adapterFor(host, 'deepseek').run({
+      runId: 'r-route',
+      prompt: 'hello',
+      cwd: '/repo',
+      sessionId: undefined,
+      model: undefined,
+      images: undefined,
+      stopGraceMs: undefined,
+    });
+    await collect(host, run, (sessionId) => {
+      host.emit(sessionId, { type: 'turn/end', seq: 1 });
+    });
+
+    expect(host.createdOptions).toEqual([{ provider: 'deepseek', model: 'test-model' }]);
+  });
+
+  it('falls back to the host default route when the bridge has no model', async () => {
+    // An unset DSH_LARK_MODEL arrives as an empty string, which must not
+    // override the host default with nothing.
+    const host = new FakeHost();
+    host.defaultRoute = { provider: 'deepseek', model: 'deepseek-v4-flash' };
+    const adapter = new HostDshAdapter({
+      ctx: host.ctx,
+      provider: undefined,
+      model: '',
+      factories: fakeFactories,
+    });
+    const run = adapter.run({
+      runId: 'r-default',
+      prompt: 'hello',
+      cwd: '/repo',
+      sessionId: undefined,
+      model: undefined,
+      images: undefined,
+      stopGraceMs: undefined,
+    });
+    await collect(host, run, (sessionId) => {
+      host.emit(sessionId, { type: 'turn/end', seq: 1 });
+    });
+
+    expect(host.createdOptions).toEqual([
+      { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    ]);
+  });
+
+  it('lets the run override the adapter default route', async () => {
+    const host = new FakeHost();
+    const run = adapterFor(host, 'deepseek').run({
+      runId: 'r-override',
+      prompt: 'hello',
+      cwd: '/repo',
+      sessionId: undefined,
+      provider: 'other',
+      model: 'other-model',
+      images: undefined,
+      stopGraceMs: undefined,
+    });
+    await collect(host, run, (sessionId) => {
+      host.emit(sessionId, { type: 'turn/end', seq: 1 });
+    });
+
+    expect(host.createdOptions).toEqual([{ provider: 'other', model: 'other-model' }]);
   });
 
   it('resumes a persisted session instead of creating a new one', async () => {
