@@ -1,9 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { Service } from '@deepseek-ai/cordis';
 import Schema from '@deepseek-ai/schemastery';
-import {
-  settingsNamespace,
-} from '@deepseek-ai/dsh-settings';
+import type {} from '@deepseek-ai/dsh-settings';
 import type { AgentAdapter } from './adapters/types.js';
 import type { BridgeEngine } from './cli/commands/run.js';
 import { startBridgeEngine } from './cli/commands/run.js';
@@ -47,7 +45,7 @@ export interface Config {
   /** Set to true (or env `DSH_LARK_DISABLED=1`) to keep the bridge stopped. */
   disabled?: boolean;
 }
-export const DSH_LARK_SETTINGS_NAMESPACE = settingsNamespace('dsh-lark-bot');
+export const DSH_LARK_SETTINGS_NAMESPACE = 'dsh-lark-bot';
 
 /**
  * Cordis configuration schema. dsh Web discovers this through the registered

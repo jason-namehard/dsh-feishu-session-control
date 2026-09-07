@@ -63,6 +63,14 @@ function isRetryableInitError(error: unknown): boolean {
   return error instanceof Error && RETRYABLE_INIT_ERROR.test(error.message);
 }
 
+function dshBinForLaunch(launch: SdkLaunchSpec): string | undefined {
+  if (launch.command !== 'node' && launch.command !== process.execPath && !launch.command.toLowerCase().endsWith('node.exe')) {
+    return undefined;
+  }
+  const candidate = launch.args[0];
+  return candidate && !candidate.startsWith('-') ? candidate : undefined;
+}
+
 /**
  * Wrap a harness so its start handshake survives the transient pi-ai
  * registration race. The race is per runtime boot: llm-pi-ai registers its
@@ -175,12 +183,14 @@ export class SdkDshAdapter implements AgentAdapter {
     if (this.disposed) {
       return { ok: false, error: 'adapter disposed', version: undefined };
     }
-    const client = new HarnessClient({
-      command: this.launch.command,
-      args: this.launch.args,
-      cwd: process.cwd(),
+    const clientOptions: ConstructorParameters<typeof HarnessClient>[0] = {
+      profile: this.launch.profile,
+      processCwd: process.cwd(),
       requestTimeoutMs: this.probeTimeoutMs,
-    });
+    };
+    const dshBin = dshBinForLaunch(this.launch);
+    if (dshBin) clientOptions.dshBin = dshBin;
+    const client = new HarnessClient(clientOptions);
     try {
       client.start();
       let lastError: unknown;
@@ -294,17 +304,17 @@ export class SdkDshAdapter implements AgentAdapter {
   }
 
   private createHarness(cwd: string, route: ModelRoute): DeepSeekHarness {
-    return new DeepSeekHarness({
-      launch: {
-        command: this.launch.command,
-        args: this.launch.args,
-        cwd,
-      },
+    const harnessOptions: ConstructorParameters<typeof DeepSeekHarness>[0] = {
+      profile: this.launch.profile,
+      processCwd: cwd,
       cwd,
       provider: route.provider,
       model: route.model,
-      ...(this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens }),
-    });
+    };
+    const dshBin = dshBinForLaunch(this.launch);
+    if (dshBin) harnessOptions.dshBin = dshBin;
+    if (this.maxTokens !== undefined) harnessOptions.maxTokens = this.maxTokens;
+    return new DeepSeekHarness(harnessOptions);
   }
 
   /**

@@ -1,4 +1,4 @@
-﻿# dsh-lark-bot as a profile bundle.
+# dsh-lark-bot as a profile bundle.
 #
 # Installed with `dsh plugin --profile <name> add dsh-lark-bot` (or the single
 # `dsh-lark-bot setup` command), dsh appends this package to the profile's
@@ -17,6 +17,13 @@
 # Set DSH_LARK_DISABLED=1 to keep the engine stopped.
 
 - insert:
+    # Bare-specifier anchor: dsh's client-module scanner skips every loader row
+    # whose specifier contains a slash, so this row is what makes the package's
+    # `dsh.client` declaration (the browser Settings panels) discoverable. Its
+    # host half is deliberately a no-op.
+    - id: dsh-lark-bot-client
+      name: 'dsh-lark-bot'
+
     - id: dsh-lark-bot
       name: 'dsh-lark-bot/plugin'
       config:

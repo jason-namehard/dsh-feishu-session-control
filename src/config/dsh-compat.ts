@@ -22,10 +22,10 @@ export interface DshCompatibility {
 }
 
 export const DSH_COMPATIBILITY: DshCompatibility = {
-  harness: '0.1.0-rc.8',
-  sdkClient: '0.1.0-rc.8',
-  sdkServer: '0.1.0-rc.8',
-  acp: '0.1.0-rc.8',
+  harness: '0.1.2-rc.1',
+  sdkClient: '0.1.2-rc.1',
+  sdkServer: '0.1.2-rc.1',
+  acp: '0.1.2-rc.1',
   node: '>=22.19.0',
-  verifiedAt: '2026-08-25',
+  verifiedAt: '2026-09-07',
 };

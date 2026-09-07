@@ -203,3 +203,59 @@ cordis hmr 与 SDK runtime 的连接保持），属于架构演进方向，不�
 - [x] 版本 pin / runtime 一致性：guardian 单元路径、runtime 链接与上游依赖、managed overlay
   精确内容（ACP 保留 provider/model route）均由 upgrade 检测并修复
 - [x] 最小重启窗口 + 安全网兜底 + 回滚；热重载分析落盘（架构演进方向，边界明确）
+
+## DSH 0.1.2-rc.1 破坏性变更实录
+
+本节记录 `0.1.1-rc.2 → 0.1.2-rc.1` 升级中实测到的破坏点，以及本仓库的对应修改。
+每一条都在真实 `web` profile 上复现并验证过。
+
+### 1. `dsh web` 现在强制浏览器认证
+
+`@deepseek-ai/dsh-client-connection` 给 `/api` 前缀加了 Host/Origin 围栏加
+签名 Cookie：无 Cookie 的 `/api/*` 一律 `401`，且 **没有关闭开关**
+（`Config` 只有 `trustedHosts` / `cookieMaxAgeDays` / `maxRequestBodyBytes`）。
+`dsh web` 启动时打印的 URL 带 `?token=…`，该 token 在 `/` 上换一次性
+`Set-Cookie`，之后所有请求靠 Cookie 通过。
+
+影响：`web` adapter 的 `session.create` / `session.prompt` 与事件流全部 401。
+本仓库自己注册的 `/__chameleon/*`、`/archived-sessions/*` 路由不在 `/api`
+前缀下，因此不受影响。
+
+### 2. RPC 命名与事件流端点变更
+
+- 方法名从 `session.create` 这类点号形式改为 typert 的 `session/create` 斜杠形式。
+- `/api/events.mux` 不再存在；网关改用 `/api/remote.mux`
+  （`REMOTE_STREAM_MUX_PATH`），会话事件走 `session/follow`、`session/control`
+  这类 AsyncIterable 流。
+
+Node 内置（undici）`WebSocket` 会忽略 `headers` 选项，因此无法直接给 mux
+连接带上认证 Cookie —— 这是纯 HTTP 方案在本版本上的硬阻塞点。
+
+### 3. `@deepseek-ai/dsh-client-ui-slots` 已从运行时移除
+
+`slots` 服务的提供方改为 `@deepseek-ai/dsh-client-ui-renderer`（其 client
+face 声明 `slots: SlotRegistry`）。`dsh-client-ui-slots` 只作为类型契约包保留，
+profile 里不再安装。
+
+修改：`package.json` 的 `dsh.client.inject` 由 `dsh-client-ui-slots` 改为
+`dsh-client-ui-renderer`。
+
+### 4. 客户端模块扫描只认「裸包名」loader 行
+
+`@deepseek-ai/dsh-client-modules` 的 `exactPackageSpecifier` 对任何含 `/`
+的 specifier 返回 `undefined`，该 loader 行会在读取 manifest 之前就被跳过。
+本包所有行都是子路径（`dsh-lark-bot/plugin` 等），因此整个包对扫描器不可见，
+`./client` bundle 进不了 `window.__DSH_BOOT__`，浏览器 Settings 面板静默消失。
+
+修改：新增一行裸包名 anchor（`id: dsh-lark-bot-client`, `name: dsh-lark-bot`），
+其宿主侧是空实现，只为让扫描器解析到本包 manifest。
+
+### 5. 会话持久化/查询包改名，激活顺序随之改变
+
+`dsh-session-persistence` → `dsh-session-persistence-jsonl`，
+`dsh-session-query` → `dsh-session-query-sqlite`。服务名仍是
+`ctx.sessionPersistence` / `ctx.sessionQuery`，但在 `apply()` 里同步
+`ctx.get()` 已经取不到，模块会静默 `return` 且不注册任何路由。
+
+修改：把这些服务声明为 session-manager 的 `inject` 集合，交给 cordis 等到
+服务就绪后再激活。

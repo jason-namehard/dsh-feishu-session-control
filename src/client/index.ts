@@ -1,4 +1,4 @@
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
+import type { Context as ClientContext } from '@deepseek-ai/cordis';
 import { apply as applySettings, inject as settingsInject } from './settings-card.js';
 import { apply as applySessionManager, inject as sessionManagerInject } from '../integrated/session-manager/client/index.js';
 

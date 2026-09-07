@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 // dsh-sessions-manager — host half.
 //
 // Serves /archived-sessions/* JSON routes (list / restore / restore-many /
@@ -17,7 +17,20 @@ import { renderSessionMarkdown } from './markdown.js'
 import { createStarIndex } from './star-index.js'
 
 export const name = 'dsh-sessions-manager'
-export const inject = []
+// Services this host half cannot work without. Declaring them as the
+// plugin's inject set makes cordis defer activation until every one is
+// live, instead of the module loading early, reading undefined out of
+// ctx.get(), and silently registering no routes (which is how the
+// Settings panels and /__chameleon/* endpoints vanished after the DSH
+// 0.1.2-rc.1 repackaging moved session persistence/query into new
+// packages and changed their activation order).
+export const inject = [
+  'webServer',
+  'workspaceRegistry',
+  'sessionPersistence',
+  'sessionQuery',
+  'storageDomain',
+]
 
 const MAX_TITLE = 80
 // Recycle bin (回收站): normal deletes land here instead of being erased.
