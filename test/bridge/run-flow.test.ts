@@ -148,6 +148,77 @@ describe('runAgentBatch', () => {
     expect(JSON.stringify(checkpoints)).not.toContain('secret');
   });
 
+  it('acknowledges with a reaction and delivers the whole answer as one message', async () => {
+    const feishu = makeChannel();
+    const reactions: Array<[string, string]> = [];
+    const cleared: Array<[string, string]> = [];
+    const channel = {
+      ...feishu.channel,
+      addReaction: async (messageId: string, emoji: string) => {
+        reactions.push([messageId, emoji]);
+        return 'reaction-1';
+      },
+      removeReaction: async (messageId: string, reactionId: string) => {
+        cleared.push([messageId, reactionId]);
+      },
+    };
+
+    const outcome = await runAgentBatch({
+      scope: 'chat-quiet-ack', chatId: 'chat-quiet-ack', messages: ['do work'],
+      replyTo: 'om-user-message',
+      adapter: fakeAdapter([
+        { type: 'system', sessionId: 'session-ack', cwd: '/tmp/project', model: 'm' },
+        { type: 'text', delta: 'first half ' },
+        { type: 'text', delta: 'second half' },
+        { type: 'done', sessionId: 'session-ack', terminationReason: 'normal' },
+      ]),
+      sessions: new SessionStore(':memory:'), workspaces: new WorkspaceStore(':memory:'),
+      activeRuns: new ActiveRuns(), channel, defaultWorkspace: '/tmp/project',
+    });
+
+    expect(outcome).toBe('completed');
+    expect(reactions).toEqual([['om-user-message', 'OnIt']]);
+    // Cleared once the answer lands, so a finished run leaves no residue.
+    expect(cleared).toEqual([['om-user-message', 'reaction-1']]);
+    // No progress card at all.
+    expect(feishu.updates).toEqual([]);
+    // The streamed halves arrive as a single message, not a trail of partials.
+    expect(feishu.messages).toEqual(['first half second half']);
+  });
+
+  it('says so when a quiet run fails, instead of ending in silence', async () => {
+    const feishu = makeChannel();
+    await runAgentBatch({
+      scope: 'chat-quiet-fail', chatId: 'chat-quiet-fail', messages: ['do work'],
+      adapter: fakeAdapter([
+        { type: 'system', sessionId: 'session-fail', cwd: '/tmp/project', model: 'm' },
+        { type: 'error', message: 'tool exploded', terminationReason: 'failed' },
+      ]),
+      sessions: new SessionStore(':memory:'), workspaces: new WorkspaceStore(':memory:'),
+      activeRuns: new ActiveRuns(), channel: feishu.channel, defaultWorkspace: '/tmp/project',
+    });
+
+    // Silence after an acknowledgement reads exactly like "still working".
+    expect(feishu.messages.join(' ')).toContain('执行失败');
+  });
+
+  it('still renders the progress card when it is asked for', async () => {
+    const feishu = makeChannel();
+    await runAgentBatch({
+      scope: 'chat-card', chatId: 'chat-card', messages: ['do work'],
+      quietProgress: false,
+      adapter: fakeAdapter([
+        { type: 'system', sessionId: 'session-card', cwd: '/tmp/project', model: 'm' },
+        { type: 'final_text', content: 'the answer' },
+        { type: 'done', sessionId: 'session-card', terminationReason: 'normal' },
+      ]),
+      sessions: new SessionStore(':memory:'), workspaces: new WorkspaceStore(':memory:'),
+      activeRuns: new ActiveRuns(), channel: feishu.channel, defaultWorkspace: '/tmp/project',
+    });
+
+    expect(feishu.updates.length).toBeGreaterThan(0);
+  });
+
   it('keeps the reasoning phase out of the Feishu card by default', async () => {
     const feishu = makeChannel();
     const outcome = await runAgentBatch({
@@ -174,6 +245,9 @@ describe('runAgentBatch', () => {
   it('shows the reasoning phase when explicitly opted in', async () => {
     const feishu = makeChannel();
     await runAgentBatch({
+      // Asserts on the progress card, so it must ask for one: the
+      // reaction-only shape is the default.
+      quietProgress: false,
       scope: 'chat-verbose', chatId: 'chat-verbose', messages: ['do work'],
       showThinking: true,
       adapter: fakeAdapter([
@@ -378,6 +452,9 @@ describe('runAgentBatch', () => {
       sent.push({ markdown, options });
     };
     await runAgentBatch({
+      // Asserts on the progress card, so it must ask for one: the
+      // reaction-only shape is the default.
+      quietProgress: false,
       scope: 'chat-final',
       chatId: 'chat-final',
       messages: ['answer me'],
@@ -421,6 +498,9 @@ describe('runAgentBatch', () => {
       throw new Error('message rejected');
     };
     await runAgentBatch({
+      // Asserts on the progress card, so it must ask for one: the
+      // reaction-only shape is the default.
+      quietProgress: false,
       scope: 'chat-final-fail',
       chatId: 'chat-final-fail',
       messages: ['answer me'],
@@ -481,6 +561,9 @@ describe('runAgentBatch', () => {
       },
     };
     await runAgentBatch({
+      // Asserts on the progress card, so it must ask for one: the
+      // reaction-only shape is the default.
+      quietProgress: false,
       scope: 'chat-legacy-card',
       chatId: 'chat-legacy-card',
       messages: ['answer me'],
@@ -513,6 +596,9 @@ describe('runAgentBatch', () => {
     const fake = makeChannel();
 
     await runAgentBatch({
+      // Asserts on the progress card, so it must ask for one: the
+      // reaction-only shape is the default.
+      quietProgress: false,
       scope: 'chat-a',
       chatId: 'chat-a',
       messages: ['fix it'],
@@ -687,6 +773,9 @@ describe('runAgentBatch', () => {
     const fake = makeChannel();
 
     await runAgentBatch({
+      // Asserts on the progress card, so it must ask for one: the
+      // reaction-only shape is the default.
+      quietProgress: false,
       scope: 'chat-timeout',
       chatId: 'chat-timeout',
       messages: ['long task'],
@@ -840,6 +929,9 @@ describe('runAgentBatch', () => {
 
     const started = Date.now();
     await runAgentBatch({
+      // Asserts on the progress card, so it must ask for one: the
+      // reaction-only shape is the default.
+      quietProgress: false,
       scope: 'chat-busy',
       chatId: 'chat-busy',
       messages: ['long task'],
@@ -970,6 +1062,9 @@ describe('runAgentBatch', () => {
     const fake = makeChannel();
 
     await runAgentBatch({
+      // Asserts on the progress card, so it must ask for one: the
+      // reaction-only shape is the default.
+      quietProgress: false,
       scope: 'chat-a',
       chatId: 'chat-a',
       messages: ['new message'],
@@ -1111,6 +1206,9 @@ describe('runAgentBatch', () => {
     const fake = makeChannel();
 
     await runAgentBatch({
+      // Interim bubbles and the process card are the same feature: the
+      // reaction-only default holds text back until the single final answer.
+      quietProgress: false,
       scope: 'chat-a',
       chatId: 'chat-a',
       messages: ['new message'],
@@ -1172,6 +1270,9 @@ describe('runAgentBatch', () => {
     const fake = makeChannel();
 
     const outcome = await runAgentBatch({
+      // Interim bubbles and the process card are the same feature: the
+      // reaction-only default holds text back until the single final answer.
+      quietProgress: false,
       scope: 'chat-a',
       chatId: 'chat-a',
       messages: ['inspect this image'],
@@ -1218,6 +1319,9 @@ describe('runAgentBatch', () => {
     const fake = makeChannel();
 
     const outcome = await runAgentBatch({
+      // Interim bubbles and the process card are the same feature: the
+      // reaction-only default holds text back until the single final answer.
+      quietProgress: false,
       scope: 'chat-a',
       chatId: 'chat-a',
       messages: ['continue'],
@@ -1277,6 +1381,9 @@ describe('runAgentBatch', () => {
     const fake = makeChannel();
 
     await runAgentBatch({
+      // Interim bubbles and the process card are the same feature: the
+      // reaction-only default holds text back until the single final answer.
+      quietProgress: false,
       scope: 'chat-a',
       chatId: 'chat-a',
       messages: ['new message'],
@@ -1668,6 +1775,9 @@ describe('runAgentBatch', () => {
     });
 
     const runPromise = runAgentBatch({
+      // Interim bubbles and the process card are the same feature: the
+      // reaction-only default holds text back until the single final answer.
+      quietProgress: false,
       scope: 'reanchor', chatId: 'reanchor', messages: ['go'], adapter,
       sessions: new SessionStore(':memory:'), workspaces: new WorkspaceStore(':memory:'),
       activeRuns: new ActiveRuns(), channel: wrapped, defaultWorkspace: '/tmp/project',
@@ -1880,32 +1990,36 @@ describe('interim text bubbles (issue #95)', () => {
 
   it('emits each text segment as an independent interim bubble across tool calls', async () => {
     const fake = makeChannel();
-    await runAgentBatch(
-      baseInput('chat-bubbles', [
+    await runAgentBatch({
+      ...(baseInput('chat-bubbles', [
         { type: 'system', sessionId: 's', cwd: '/tmp/project', model: undefined },
         { type: 'text', delta: 'I will search' },
         { type: 'tool_use', id: 't1', name: 'grep', input: {} },
         { type: 'text', delta: 'Found it' },
         { type: 'tool_use', id: 't2', name: 'edit', input: {} },
         { type: 'done', sessionId: 's', terminationReason: 'normal' },
-      ], fake.channel),
-    );
+      ], fake.channel)),
+      // Interim bubbles only exist with the progress card enabled.
+      quietProgress: false,
+    });
     // Each pre-tool segment is its own bubble; nothing is held back.
     expect(fake.messages).toEqual(['I will search', 'Found it']);
   });
 
   it('sends only the as-yet-unsent tail as the final answer (no duplicate)', async () => {
     const fake = makeChannel();
-    await runAgentBatch(
-      baseInput('chat-tail', [
+    await runAgentBatch({
+      ...(baseInput('chat-tail', [
         { type: 'system', sessionId: 's', cwd: '/tmp/project', model: undefined },
         { type: 'text', delta: 'Hello ' },
         { type: 'text', delta: 'world' },
         { type: 'tool_use', id: 't1', name: 'grep', input: {} },
         { type: 'text', delta: ' Done' },
         { type: 'done', sessionId: 's', terminationReason: 'normal' },
-      ], fake.channel),
-    );
+      ], fake.channel)),
+      // Interim bubbles only exist with the progress card enabled.
+      quietProgress: false,
+    });
     // "Hello world" was flushed as an interim bubble; the final answer is only
     // the remaining " Done" — never a re-send of the whole output.
     expect(fake.messages).toEqual(['Hello world', ' Done']);
@@ -1953,6 +2067,9 @@ describe('interim text bubbles (issue #95)', () => {
     };
     const fake = makeChannel();
     const settled = runAgentBatch({
+      // Interim bubbles and the process card are the same feature: the
+      // reaction-only default holds text back until the single final answer.
+      quietProgress: false,
       ...baseInput('chat-pause', [], fake.channel),
       adapter,
       interimDebounceMs: 500,

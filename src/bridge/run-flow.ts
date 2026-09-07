@@ -47,6 +47,13 @@ import type { SessionAliasManager } from '../session/alias-manager.js';
  */
 export const INTERIM_BUBBLE_PAUSE_MS = 1200;
 
+/**
+ * Feishu emoji used to acknowledge a message the bridge has picked up.
+ * `OnIt` reads as "seen, working on it" rather than "done", which is what an
+ * acknowledgement must not claim.
+ */
+export const ACK_EMOJI = 'OnIt';
+
 export interface RunFlowInput {
   scope: string;
   chatId: string;
@@ -105,6 +112,16 @@ export interface RunFlowInput {
   interimDebounceMs?: number;
   /** Show the agent's reasoning phase in Feishu (default off). */
   showThinking?: boolean;
+  /**
+   * Report progress with a reaction on the user's own message instead of a
+   * live progress card (default on).
+   *
+   * On a phone the card is the bulk of the conversation and the answer is the
+   * only part worth reading, so the quiet shape is: react to acknowledge, stay
+   * silent while working, then deliver one result. Approval, question and plan
+   * cards are unaffected — they are their own messages and still appear.
+   */
+  quietProgress?: boolean;
   /** Visible member identity when the group uses member-isolated scopes. */
   scopeOwner?: string;
   /** Trusted peer identities available for an explicit lark_notify handoff. */
@@ -235,6 +252,22 @@ async function runAttempt(
   resuming: boolean,
   replyOptions: Record<string, unknown>,
 ): Promise<Exclude<RunState['terminal'], 'running'>> {
+  // Quiet is the default: acknowledge with a reaction, then deliver one result.
+  const quiet = input.quietProgress !== false;
+  // With no progress card, a reaction on the user's own message is the only
+  // signal that the bot saw them at all — without it a long run is
+  // indistinguishable from being ignored. It costs no space in the chat, and
+  // is cleared once the answer lands so a finished run leaves no residue.
+  let ackReactionId: string | undefined;
+  if (quiet && input.replyTo !== undefined && input.channel.addReaction) {
+    ackReactionId = await input.channel.addReaction(input.replyTo, ACK_EMOJI);
+  }
+  const clearAck = async (): Promise<void> => {
+    if (ackReactionId === undefined || input.replyTo === undefined) return;
+    const reactionId = ackReactionId;
+    ackReactionId = undefined;
+    await input.channel.removeReaction?.(input.replyTo, reactionId);
+  };
   // A native-resuming adapter (SDK) already has the conversation persisted in
   // the dsh session; replaying the transcript would duplicate it and can drift
   // from the runtime log. Fresh runs (and non-resuming adapters) replay it.
@@ -401,6 +434,12 @@ async function runAttempt(
           // final answer.
           if (timedOut || state.terminal !== 'running') return;
           if (interim.buffered === '') return;
+          if (quiet) {
+            // Hold everything back: `interim.delivered` stays empty, so the
+            // terminal step below sends the whole answer as a single message
+            // rather than a trail of partial ones.
+            return;
+          }
           const text = interim.buffered;
           interim.buffered = '';
           interim.delivered += text;
@@ -666,6 +705,24 @@ async function runAttempt(
             : assistantOutput.startsWith(delivered)
               ? assistantOutput.slice(delivered.length)
               : '';
+          if (quiet && state.terminal !== 'done') {
+            // The card used to carry the failure. Without it a failed run
+            // would end in silence, which reads exactly like a run still in
+            // progress — the one thing an acknowledgement must never imply.
+            const reason = state.terminal === 'interrupted'
+              ? bilingualMarkdown('⏹️ 已中断。', '⏹️ Interrupted.')
+              : state.terminal === 'idle_timeout'
+                ? bilingualMarkdown('⏱️ 超时结束。', '⏱️ Timed out.')
+                : bilingualMarkdown('⚠️ 执行失败。', '⚠️ Run failed.');
+            try {
+              await input.channel.sendMarkdown(input.chatId, reason, { ...replyOptions });
+            } catch (error) {
+              log.warn('run-flow', 'quiet-terminal-notice-failed', {
+                scope: input.scope,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
           if (state.terminal === 'done' && remaining.trim() !== '') {
             try {
               await (input.deliverFinalReply
@@ -679,6 +736,9 @@ async function runAttempt(
             }
           }
         } finally {
+          // Clear the acknowledgement however the run ended — success, failure
+          // or interruption. A stale reaction would imply work still running.
+          await clearAck();
           clearInterval(ticker);
           clearInterimTimer();
           if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
@@ -702,7 +762,12 @@ async function runAttempt(
         replyOptions,
       );
     };
-    try {
+    if (quiet) {
+      // No progress card at all. The producer still drives the whole run; it
+      // simply renders into nothing, exactly as the card-delivery fallback
+      // below already does when Feishu refuses the card.
+      await produceCard({ update: async () => {} }, renderCard);
+    } else try {
       await streamWith(renderCard);
     } catch (error) {
       if (producerStarted && !producerCompleted) throw error;

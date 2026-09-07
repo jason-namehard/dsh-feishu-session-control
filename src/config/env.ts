@@ -59,6 +59,12 @@ export interface RuntimeEnv {
    * HTTP transport never delivered.
    */
   showThinking: boolean;
+  /**
+   * Report progress with a live card instead of a reaction (default off).
+   * The card is the bulk of a phone conversation, so the quiet shape — react,
+   * work silently, deliver one result — is the default.
+   */
+  progressCard: boolean;
   /** Bridge engine heartbeat interval (guardian liveness signal), default 5000. */
   heartbeatMs: number;
   /** Guardian disabled switch (DSH_LARK_GUARDIAN_DISABLED=1 keeps it stopped). */
@@ -352,6 +358,7 @@ export function loadRuntimeEnv(
     accessDefaultDeny: parseBoolean(source.DSH_LARK_ACCESS_DEFAULT_DENY, false),
     eventFreshnessMs: parseFreshness(source.DSH_LARK_EVENT_FRESHNESS_MS),
     showThinking: source.DSH_LARK_SHOW_THINKING === '1',
+    progressCard: source.DSH_LARK_PROGRESS_CARD === '1',
     heartbeatMs: parsePositiveIntMin(
       source.DSH_LARK_HEARTBEAT_MS,
       DEFAULTS.heartbeatMs,

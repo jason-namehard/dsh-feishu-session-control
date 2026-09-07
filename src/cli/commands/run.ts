@@ -586,6 +586,7 @@ export async function startBridgeEngine(
           chatId: first.chatId,
           messages,
           showThinking: env.showThinking,
+          quietProgress: !env.progressCard,
           adapter,
           sessions,
           workspaces,
