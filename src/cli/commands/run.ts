@@ -18,6 +18,7 @@ import { RetentionStore } from '../../bot/retention-store.js';
 import { RoleStore } from '../../bot/role-store.js';
 import { RunPolicyStore } from '../../bot/run-policy.js';
 import { IsolationStore } from '../../bot/isolation-store.js';
+import { MentionPolicyStore } from '../../bot/mention-policy-store.js';
 import { PlanApprovalRegistry } from '../../bot/plan-approvals.js';
 import { PermissionPolicyStore } from '../../bot/permission-policy-store.js';
 import {
@@ -248,6 +249,11 @@ export async function startBridgeEngine(
   const roleStore = new RoleStore(paths.profilePath(profileName, 'roles.json'));
   const scopeDirectory = new ScopeDirectory(paths.profilePath(profileName, 'scopes.json'));
   const isolationStore = new IsolationStore(paths.profilePath(profileName, 'isolation.json'));
+  // The env flag is the default for every group; this file holds the exceptions.
+  const mentionPolicies = new MentionPolicyStore(
+    paths.profilePath(profileName, 'mention-policies.json'),
+    env.groupNoAt ? 'open' : 'require',
+  );
   const permissionPolicies = new PermissionPolicyStore(paths.permissionPoliciesFile(profileName));
   const notificationPreferences = new NotificationPreferenceStore(paths.notificationPreferencesFile(profileName));
   const notificationChannels = new NotificationChannelStore(paths.notificationChannelsFile(profileName));
@@ -273,6 +279,7 @@ export async function startBridgeEngine(
     roleStore.load(),
     scopeDirectory.load(),
     isolationStore.load(),
+    mentionPolicies.load(),
     permissionPolicies.load(),
     notificationPreferences.load(),
     notificationChannels.load(),
@@ -695,6 +702,7 @@ export async function startBridgeEngine(
     retentionStore,
     roleStore,
     isolationStore,
+    mentionPolicies,
     scopeDirectory,
     archiver,
     defaultRetention: env.retentionMsgs,

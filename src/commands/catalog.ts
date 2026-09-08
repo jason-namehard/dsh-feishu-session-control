@@ -27,6 +27,7 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { names: ['/concurrency'], area: 'operations', zh: '`[N|default]` — 查看或设置 scope 并行数', en: '`[N|default]` — view or set scope concurrency' },
   { names: ['/permission'], area: 'policy', zh: '`[ask|allow|deny] [scope]` — 工具权限策略', en: '`[ask|allow|deny] [scope]` — tool permission policy' },
   { names: ['/isolation'], area: 'policy', zh: '`[group|topic|member]` — 群会话隔离（设置需管理员）', en: '`[group|topic|member]` — group isolation (admin to set)' },
+  { names: ['/mention'], area: 'policy', zh: '`on|off|default [chatId]` — 本群（或指定群）是否必须 @ 机器人才回复', en: '`on|off|default [chatId]` — whether this (or a named) group needs an @-mention' },
   { names: ['/role'], area: 'configuration', zh: '`list|show|set|clear|save|remove …` — 管理角色', en: '`list|show|set|clear|save|remove …` — manage roles' },
   { names: ['/notify'], area: 'communication', zh: '`<scope|chatId> <text>` / `list` — 跨会话通知（发送需管理员）', en: '`<scope|chatId> <text>` / `list` — cross-session notification (admin to send)' },
   { names: ['/notifications'], area: 'communication', zh: '`[show|off|on …]` — scope 提醒策略（支持 `sinks=`）', en: '`[show|off|on …]` — scope notification policy (supports `sinks=`)' },

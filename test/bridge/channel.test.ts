@@ -9,6 +9,7 @@ import type { AgentAdapter, AgentAvailability, AgentRun } from '../../src/adapte
 import { ActiveRuns } from '../../src/bot/active-runs.js';
 import { ApprovalRegistry } from '../../src/bot/approvals.js';
 import { ConcurrencyStore } from '../../src/bot/concurrency-store.js';
+import { MentionPolicyStore } from '../../src/bot/mention-policy-store.js';
 import { ModelStore } from '../../src/bot/model-store.js';
 import { QuestionRegistry } from '../../src/bot/questions.js';
 import { PlanApprovalRegistry } from '../../src/bot/plan-approvals.js';
@@ -1232,6 +1233,89 @@ describe('startChannel', () => {
         'group',
         'om-event',
       );
+    } finally {
+      await bridge?.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it('answers un-mentioned messages only in the chats whose policy allows it', async () => {
+    // One profile-wide switch cannot serve a working group that should read
+    // everything and a busy group that must stay quiet unless addressed. The
+    // flag is the default; the store is the exception list.
+    // Event freshness is wall-clock, so the fixture's timestamps need a clock
+    // that agrees with them.
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const fake = makeChannel();
+    const pending = {
+      push: vi.fn(),
+      size: vi.fn().mockReturnValue(0),
+      isFlushing: vi.fn().mockReturnValue(false),
+      isBlocked: vi.fn().mockReturnValue(false),
+    };
+    const mentionPolicies = new MentionPolicyStore(':memory:', 'require');
+    await mentionPolicies.load();
+    mentionPolicies.set('oc-open', 'open');
+
+    const unmentioned = (chatId: string, messageId: string) => message({
+      messageId,
+      chatId,
+      chatType: 'group',
+      chatMode: 'group',
+      senderId: 'ou-allowed',
+      senderType: 'user',
+      senderIsBot: false,
+      content: 'no mention here',
+      createTime: 10_001,
+    });
+    vi.mocked(fake.channel.connect).mockImplementation(async () => {
+      const handle = fake.handlers.message as (msg: NormalizedMessage) => Promise<void>;
+      await handle(unmentioned('oc-open', 'om-open'));
+      await handle(unmentioned('oc-strict', 'om-strict'));
+    });
+
+    let bridge: Awaited<ReturnType<typeof startChannel>> | undefined;
+    try {
+      bridge = await startChannel({
+        appId: 'cli_test',
+        appSecret: 'secret',
+        tenant: 'feishu',
+        adapter: fakeAdapter(),
+        sessions: new SessionStore(':memory:'),
+        workspaces: new WorkspaceStore(':memory:'),
+        activeRuns: new ActiveRuns(),
+        runPolicies: new RunPolicyStore(),
+        concurrencyStore: new ConcurrencyStore(),
+        defaultScopeConcurrency: 2,
+        retentionStore: new RetentionStore(),
+        roleStore: new RoleStore(':memory:'),
+        archiver: {
+          archive: vi.fn(),
+          list: vi.fn().mockResolvedValue([]),
+          prune: vi.fn().mockResolvedValue(0),
+        } as never,
+        defaultRetention: 40,
+        archiveMax: 50,
+        archiveMaxAgeDays: 90,
+        defaultRunTimeoutMs: 300_000,
+        models: new ModelStore(),
+        wizardStore: new WizardStore(),
+        dshConfig: new DshProviderManager({ home: join(tmpdir(), 'dsh-lark-bot-test-home') }),
+        defaultModel: 'deepseek-v4-flash',
+        accessManager: {
+          snapshot: () => ({ allowedUsers: ['ou-allowed'], allowedChats: [], admins: [] }),
+        } as never,
+        pending: pending as never,
+        defaultWorkspace: '/tmp/project',
+        eventFreshnessMs: 600_000,
+        // The profile default is strict; only oc-open departs from it.
+        groupNoAt: false,
+        mentionPolicies,
+        createChannel: fake.createChannel,
+      });
+
+      expect(pending.push.mock.calls.map(([, msg]) => msg.messageId)).toEqual(['om-open']);
     } finally {
       await bridge?.disconnect();
       vi.useRealTimers();

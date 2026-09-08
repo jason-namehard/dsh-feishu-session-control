@@ -130,3 +130,22 @@ describe('loadRuntimeEnv', () => {
     );
   });
 });
+
+describe('group polling switch', () => {
+  it('turns polling off for 0/off/false, and keeps the floor otherwise', () => {
+    // Once `im:message.group_msg` is granted the event stream delivers
+    // un-mentioned messages directly, and the poll only re-reads what has
+    // already arrived — so "off" has to be expressible.
+    const at = (value: string | undefined) =>
+      loadRuntimeEnv({ ...(value === undefined ? {} : { DSH_LARK_GROUP_POLL_MS: value }) }).groupPollMs;
+
+    expect(at('0')).toBe(0);
+    expect(at('off')).toBe(0);
+    expect(at('false')).toBe(0);
+    expect(at(undefined)).toBe(3_000);
+    expect(at('10000')).toBe(10_000);
+    // Below the floor still fails loudly, rather than quietly becoming a busy
+    // loop that hammers the Feishu API.
+    expect(() => at('50')).toThrow(/>= 1000/);
+  });
+});

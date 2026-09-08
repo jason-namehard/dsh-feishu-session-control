@@ -36,7 +36,7 @@ export interface RuntimeEnv {
   stopGraceMs: number;
   /** Opt-in group history polling to receive messages that do not mention the bot. */
   groupNoAt: boolean;
-  /** Poll interval for group no-at history reads (minimum 1000ms). */
+  /** Poll interval for group no-at history reads (minimum 1000ms; 0 disables). */
   groupPollMs: number;
   /** Maximum consecutive bot @ handoffs observed by one instance before it stops. */
   botHandoffMax: number;
@@ -238,6 +238,21 @@ function parseMinOneInt(value: string | undefined, fallback: number, name: strin
   return parsed;
 }
 
+/**
+ * Poll interval for un-mentioned group messages, or 0 to stop polling.
+ *
+ * Polling exists only because Feishu does not push un-mentioned group messages
+ * without the sensitive `im:message.group_msg` scope. Once that scope is
+ * granted the event stream delivers them directly and the poll is pure
+ * overhead — so `0` (or `off`) has to be expressible, which a minimum-bound
+ * integer could not say.
+ */
+function parseGroupPollMs(value: string | undefined): number {
+  const raw = value?.trim().toLowerCase();
+  if (raw === '0' || raw === 'off' || raw === 'false') return 0;
+  return parseIntAtLeast(value, DEFAULTS.groupPollMs, 1_000, 'DSH_LARK_GROUP_POLL_MS');
+}
+
 function parsePositiveIntMin(value: string | undefined, fallback: number, name: string): number {
   const raw = value?.trim();
   if (!raw) return fallback;
@@ -322,12 +337,7 @@ export function loadRuntimeEnv(
     runTimeoutMs: parseTimeout(source.DSH_LARK_RUN_TIMEOUT_MS),
     stopGraceMs: parseStopGrace(source.DSH_LARK_STOP_GRACE_MS),
     groupNoAt: parseBoolean(source.DSH_LARK_GROUP_NO_AT, false),
-    groupPollMs: parseIntAtLeast(
-      source.DSH_LARK_GROUP_POLL_MS,
-      DEFAULTS.groupPollMs,
-      1_000,
-      'DSH_LARK_GROUP_POLL_MS',
-    ),
+    groupPollMs: parseGroupPollMs(source.DSH_LARK_GROUP_POLL_MS),
     botHandoffMax: parseIntAtLeast(
       source.DSH_LARK_BOT_HANDOFF_MAX,
       DEFAULTS.botHandoffMax,

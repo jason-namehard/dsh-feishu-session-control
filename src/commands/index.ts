@@ -17,6 +17,7 @@ import type { RunPolicyStore } from '../bot/run-policy.js';
 import type { RetentionStore } from '../bot/retention-store.js';
 import type { RoleStore } from '../bot/role-store.js';
 import type { IsolationStore, ScopeIsolationMode } from '../bot/isolation-store.js';
+import type { MentionPolicyStore } from '../bot/mention-policy-store.js';
 import type { PlanApprovalRegistry } from '../bot/plan-approvals.js';
 import type { AccessManager } from '../config/access-manager.js';
 import type { SessionStore } from '../session/store.js';
@@ -118,6 +119,7 @@ export interface CommandContext {
   retentionStore: RetentionStore;
   roleStore: RoleStore;
   isolationStore?: Pick<IsolationStore, 'get' | 'set'>;
+  mentionPolicies?: Pick<MentionPolicyStore, 'get' | 'set' | 'clear' | 'fallback' | 'isOverridden' | 'overrides'>;
   isolationMode?: ScopeIsolationMode;
   scopeDirectory: ScopeDirectory;
   archiver: SessionArchive;
@@ -726,6 +728,68 @@ async function handleIsolation(args: string, ctx: CommandContext): Promise<void>
     ctx,
     `已将本群隔离模式设为 **${mode}**，从下一条消息起生效。已有 group / topic / member scope 与会话数据均保留，切回后可继续使用。`,
     `Set this group’s isolation mode to **${mode}**. It takes effect on the next message; existing group/topic/member scopes and session data are preserved.`,
+  );
+}
+
+/**
+ * `/mention [on|off|default|list] [chatId]` — whether a group answers without
+ * being @-mentioned.
+ *
+ * The profile-wide default is `DSH_LARK_GROUP_NO_AT`; this sets the exceptions.
+ * A chat id may be given so a busy group can be tightened from somewhere else,
+ * which is the case that matters: you notice the noise in that group, but you
+ * do not want to type a command into it.
+ */
+async function handleMention(args: string, ctx: CommandContext): Promise<void> {
+  const store = ctx.mentionPolicies;
+  if (!store) {
+    await reply(ctx, '当前运行环境未启用 @ 策略存储。', 'Mention policy storage is not enabled in this runtime.');
+    return;
+  }
+  const tokens = args.trim().split(/\s+/u).filter(Boolean);
+  const action = (tokens[0] ?? '').toLowerCase();
+  const targetChat = tokens[1] ?? ctx.chatId;
+  const fallbackLabel = store.fallback() === 'open' ? '不需要 @' : '必须 @';
+
+  if (action === '' || action === 'list') {
+    const overrides = store.overrides();
+    const lines = [
+      `默认（所有群）：**${fallbackLabel}** · default for every group`,
+      ...(ctx.chatMode === 'p2p'
+        ? ['私聊不受此设置影响，本来就不需要 @。 · Direct chats never need a mention.']
+        : [`本群：**${store.get(ctx.chatId) === 'open' ? '不需要 @' : '必须 @'}**${store.isOverridden(ctx.chatId) ? '（本群单独设置）' : '（跟随默认）'}`]),
+      '',
+      ...(overrides.length === 0
+        ? ['暂无单独设置的群 · No per-chat overrides.']
+        : ['单独设置的群 · Per-chat overrides:',
+           ...overrides.map((entry: { chatId: string; policy: 'require' | 'open' }) => `- \`${entry.chatId}\` — ${entry.policy === 'open' ? '不需要 @' : '必须 @'}`)]),
+      '',
+      '用法 · Usage: `/mention on|off|default [chatId]`（on = 必须 @ / on = require a mention）',
+    ];
+    await ctx.channel.sendMarkdown(ctx.chatId, lines.join('\n'), { replyTo: ctx.messageId });
+    return;
+  }
+  if (action !== 'on' && action !== 'off' && action !== 'default') {
+    await reply(ctx, '用法：`/mention on|off|default [chatId]`', 'Usage: `/mention on|off|default [chatId]`');
+    return;
+  }
+  if (!requireAdmin(ctx)) return;
+  const here = targetChat === ctx.chatId;
+  if (action === 'default') {
+    store.clear(targetChat);
+    await reply(
+      ctx,
+      `${here ? '本群' : `\`${targetChat}\``}已恢复跟随默认（**${fallbackLabel}**），从下一条消息起生效。`,
+      `${here ? 'This chat' : `\`${targetChat}\``} now follows the default (**${store.fallback()}**), from the next message on.`,
+    );
+    return;
+  }
+  const policy = action === 'on' ? 'require' : 'open';
+  store.set(targetChat, policy);
+  await reply(
+    ctx,
+    `${here ? '本群' : `\`${targetChat}\``}已设为 **${policy === 'require' ? '必须 @ 机器人才回复' : '不需要 @，回复每一条消息'}**，从下一条消息起生效。`,
+    `${here ? 'This chat' : `\`${targetChat}\``} is now **${policy === 'require' ? 'mention-only' : 'answering every message'}**, from the next message on.`,
   );
 }
 
@@ -1461,6 +1525,7 @@ const handlers: Record<string, Handler> = {
   '/concurrency': handleConcurrency,
   '/permission': handlePermission,
   '/isolation': handleIsolation,
+  '/mention': handleMention,
   '/role': handleRole,
   '/notify': handleNotify,
   '/notifications': handleNotifications,

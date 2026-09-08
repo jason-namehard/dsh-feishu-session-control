@@ -13,6 +13,7 @@ import type { RoleStore } from '../bot/role-store.js';
 import type { RunPolicyStore } from '../bot/run-policy.js';
 import type { WizardStore } from '../bot/wizard-store.js';
 import type { IsolationStore } from '../bot/isolation-store.js';
+import type { MentionPolicyStore } from '../bot/mention-policy-store.js';
 import type { PlanApprovalRegistry } from '../bot/plan-approvals.js';
 import {
   statusCardInputFor,
@@ -129,6 +130,11 @@ export interface StartChannelDeps {
   accessDefaultDeny?: boolean;
   eventFreshnessMs?: number;
   groupNoAt?: boolean;
+  /**
+   * Per-chat exceptions to {@link groupNoAt}. Absent, every group follows the
+   * flag; present, a chat listed there overrides it in either direction.
+   */
+  mentionPolicies?: MentionPolicyStore;
   groupPollMs?: number;
   /** Trusted fleet lookup for inbound bot-to-bot @ handoffs. */
   isTrustedBot?: (openId: string) => Promise<boolean>;
@@ -328,10 +334,16 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     const repliedQuestion = msg.replyToMessageId
       ? deps.questions?.pendingForMessage(msg.replyToMessageId)
       : undefined;
+    // Whether THIS chat answers without being addressed: the profile-wide flag,
+    // unless the chat has its own entry. One switch cannot serve a working
+    // group that should read everything and a busy group that must stay quiet.
+    const answersWithoutMention = deps.mentionPolicies
+      ? deps.mentionPolicies.get(msg.chatId) === 'open'
+      : deps.groupNoAt === true;
     if (
       chatMode !== 'p2p' &&
       !msg.mentionedBot &&
-      deps.groupNoAt !== true &&
+      !answersWithoutMention &&
       repliedQuestion === undefined
     ) {
       return;
@@ -339,7 +351,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     if (
       chatMode !== 'p2p' &&
       !msg.mentionedBot &&
-      deps.groupNoAt === true &&
+      answersWithoutMention &&
       repliedQuestion === undefined
     ) {
       const access = deps.accessManager.snapshot();
@@ -399,6 +411,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       threadId: msg.threadId,
       chatMode,
       isolationStore,
+      ...(deps.mentionPolicies ? { mentionPolicies: deps.mentionPolicies } : {}),
       isolationMode: effectiveIsolationMode,
       sessions: deps.sessions,
       workspaces: deps.workspaces,
@@ -582,9 +595,20 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     }
   };
 
-  if (deps.groupNoAt && deps.scopeDirectory) {
+  // Un-@'d group messages do not arrive on the event stream without the
+  // sensitive `im:message.group_msg` scope, so they are polled from group
+  // history instead. Poll whenever any chat could answer un-mentioned — the
+  // profile default, or a single chat opted in — and let the gate above drop
+  // whatever the chat's own policy refuses.
+  const anyChatAnswersUnmentioned = deps.groupNoAt === true ||
+    (deps.mentionPolicies?.overrides().some((entry) => entry.policy === 'open') ?? false);
+  // `DSH_LARK_GROUP_POLL_MS=0` turns the poll off: with the
+  // `im:message.group_msg` scope granted, un-mentioned messages arrive on the
+  // event stream and polling only repeats what has already been delivered.
+  const pollIntervalMs = deps.groupPollMs ?? 3_000;
+  if (anyChatAnswersUnmentioned && pollIntervalMs > 0 && deps.scopeDirectory) {
     groupPoller = new GroupMessagePoller({
-      pollIntervalMs: deps.groupPollMs ?? 3_000,
+      pollIntervalMs,
       freshnessMs: deps.eventFreshnessMs ?? 600_000,
       source: deps.groupHistorySource ?? larkGroupHistorySource(channel),
       knownChats: () => deps.scopeDirectory?.knownChats() ?? [],
