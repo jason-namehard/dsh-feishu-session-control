@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
+import { log } from '../core/logger.js';
 import {
   objectArgs,
   requiredString,
@@ -50,6 +51,15 @@ export function apply(ctx: Context, config: Config = {}) {
   const currentTurns = new WeakMap<object, number>();
   const approvedCalls = new WeakMap<object, number>();
   const gateDisabled = planGateMode(config.mode ?? process.env.DSH_LARK_PLAN_GATE) === 'off';
+  // Say which mode is live at startup. The gate is what produces every
+  // "Execute high-risk tool ..." card, and it is configured through an
+  // environment variable, so whether it is on depends on how dsh was launched
+  // — guardian relaunches, for instance, inherit only guardian's own
+  // environment. Without this line the only way to tell is to trigger a tool
+  // and see whether a card appears.
+  log.info('plan-gate', gateDisabled ? 'disabled' : 'enabled', {
+    source: config.mode !== undefined ? 'config' : 'env',
+  });
 
   policyCtx.on('agent/pre-step', async (payload, next) => {
     currentTurns.set(payload.agent, payload.turn);
