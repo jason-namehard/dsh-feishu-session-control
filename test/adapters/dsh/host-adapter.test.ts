@@ -17,6 +17,7 @@ class FakeHost {
   created: string[] = [];
   createdOptions: Array<Record<string, unknown> | undefined> = [];
   resumed: string[] = [];
+  resumedOptions: Array<Record<string, unknown> | undefined> = [];
   followups: unknown[] = [];
   cancels: unknown[] = [];
   listeners: Array<(session: unknown, event: unknown) => void> = [];
@@ -59,9 +60,13 @@ class FakeHost {
             this.live.add(sessionId);
             return { agent: this.agent(sessionId), dispose: async () => undefined };
           },
-          resume: async ({ resumeSessionId }: { resumeSessionId: string }) => {
+          resume: async ({ resumeSessionId, agentOptions }: {
+            resumeSessionId: string;
+            agentOptions?: Record<string, unknown>;
+          }) => {
             if (!this.resumable.has(resumeSessionId)) throw new Error('no such session');
             this.resumed.push(resumeSessionId);
+            this.resumedOptions.push(agentOptions);
             this.live.add(resumeSessionId);
             return { agent: this.agent(resumeSessionId), dispose: async () => undefined };
           },
@@ -275,6 +280,38 @@ describe('HostDshAdapter', () => {
     // Only the user's own text is sent; the replayed transcript preamble is not.
     expect(JSON.stringify(host.followups[0])).toContain('second turn');
     expect(JSON.stringify(host.followups[0])).not.toContain('Current user message');
+  });
+
+  it('gives a resumed session the route as well, not just a created one', async () => {
+    // Prompt assembly reads the route off the agent, not off the session it was
+    // loaded from. Passing it only on create left every chat already bound to a
+    // session failing on its next turn.
+    const host = new FakeHost();
+    host.resumable.add('session-old');
+    host.defaultRoute = { provider: 'deepseek', model: 'deepseek-v4-flash' };
+    const adapter = new HostDshAdapter({
+      ctx: host.ctx,
+      provider: undefined,
+      model: '',
+      factories: fakeFactories,
+    });
+    const run = adapter.run({
+      runId: 'r-resume-route',
+      prompt: 'hello',
+      cwd: '/repo',
+      sessionId: 'session-old',
+      model: undefined,
+      images: undefined,
+      stopGraceMs: undefined,
+    });
+    await collect(host, run, (sessionId) => {
+      host.emit(sessionId, { type: 'turn/end', seq: 1 });
+    });
+
+    expect(host.resumed).toEqual(['session-old']);
+    expect(host.resumedOptions).toEqual([
+      { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    ]);
   });
 
   it('falls back to a fresh session when the named one cannot be resumed', async () => {

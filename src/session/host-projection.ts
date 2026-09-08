@@ -154,7 +154,10 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
   }
 
   async prompt(sessionId: string, text: string, rpcId: string = randomUUID()): Promise<{ rpcId: string }> {
-    const agent = await this.services.agentFor(sessionId);
+    const agent = await this.services.agentFor(sessionId, {
+      ...(this.endpoints.provider === undefined ? {} : { provider: this.endpoints.provider }),
+      ...(this.endpoints.model === undefined ? {} : { model: this.endpoints.model }),
+    });
     if (!agent) throw new Error(`session ${sessionId} could not be resumed`);
     agent.followup(await this.services.userMessage(text));
     return { rpcId };

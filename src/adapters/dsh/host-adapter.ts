@@ -107,15 +107,18 @@ function createHostRun(
     try {
       // Resolve the target agent: reuse or resume the named session, and only
       // mint a new one when the chat has no usable session yet.
-      if (options.sessionId) agent = await services.agentFor(options.sessionId);
+      const route = {
+        ...(options.provider === undefined ? {} : { provider: options.provider }),
+        ...(options.model === undefined ? {} : { model: options.model }),
+      };
+      // Resume carries the route too: prompt assembly reads it off the agent,
+      // so an existing session resumed without one fails every turn.
+      if (options.sessionId) agent = await services.agentFor(options.sessionId, route);
       if (!agent) {
         agent = await services.createAgent(
           await services.sessionId(`session-${randomUUID()}`),
           options.cwd,
-          // Without a route dsh cannot resolve `{{model}}` while assembling the
-          // persona section, and the run fails before reaching the provider.
-          { ...(options.provider === undefined ? {} : { provider: options.provider }),
-            ...(options.model === undefined ? {} : { model: options.model }) },
+          route,
         );
       }
       const sessionId = agent.id;

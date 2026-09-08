@@ -105,6 +105,7 @@ interface HostAgentRegistry {
   }): Promise<{ agent: HostAgent; dispose(): Promise<void> }>;
   resume(options: {
     resumeSessionId: HostSessionId;
+    agentOptions?: HostAgentOptions;
   }): Promise<{ agent: HostAgent; dispose(): Promise<void> }>;
   get(id: HostSessionId): HostAgent | undefined;
   list(): HostAgent[];
@@ -240,17 +241,47 @@ export class HostServices {
    * @param sessionId - persisted session identity.
    * @returns the live agent, or undefined when the session cannot be loaded.
    */
-  async agentFor(sessionId: HostSessionId): Promise<HostAgent | undefined> {
+  async agentFor(
+    sessionId: HostSessionId,
+    route: HostAgentOptions = {},
+  ): Promise<HostAgent | undefined> {
     const registry = this.registry();
     const live = registry.get(sessionId);
     if (live) return live;
     try {
-      return (await registry.resume({ resumeSessionId: sessionId })).agent;
+      // A resumed agent needs the route just as much as a created one: prompt
+      // assembly reads `{{model}}` from the agent's options, not from the
+      // session it was loaded from. Passing it only on create left every
+      // existing session — which is every chat already bound to one — failing
+      // on its next turn.
+      return (await registry.resume({
+        resumeSessionId: sessionId,
+        agentOptions: this.resolveRoute(route),
+      })).agent;
     } catch {
       // A deleted, purged or unreadable session is a caller-visible miss, not
       // a fault: the run-flow falls back to creating a fresh session.
       return undefined;
     }
+  }
+
+  /**
+   * Merge a caller route with the host default, dropping empty values.
+   * @param route - caller-supplied provider/model, either possibly blank.
+   */
+  private resolveRoute(route: HostAgentOptions): HostAgentOptions {
+    // An unset DSH_LARK_MODEL surfaces as an empty string rather than
+    // undefined, and an empty model would override the host default with
+    // nothing — the exact shape that breaks prompt assembly.
+    const nonEmpty = (value: string | undefined): string | undefined =>
+      value === undefined || value.trim() === '' ? undefined : value;
+    const fallback = this.defaultRoute();
+    const provider = nonEmpty(route.provider) ?? nonEmpty(fallback.provider);
+    const model = nonEmpty(route.model) ?? nonEmpty(fallback.model);
+    return {
+      ...(provider === undefined ? {} : { provider }),
+      ...(model === undefined ? {} : { model }),
+    };
   }
 
   /**
@@ -273,18 +304,7 @@ export class HostServices {
     // controller does. The bridge often has no model of its own (an unset
     // DSH_LARK_MODEL leaves it empty), and an agent created with no route at
     // all cannot resolve `{{model}}` during prompt assembly.
-    // An unset DSH_LARK_MODEL surfaces as an empty string rather than
-    // undefined, and an empty model would override the host default with
-    // nothing — the exact shape that breaks prompt assembly.
-    const nonEmpty = (value: string | undefined): string | undefined =>
-      value === undefined || value.trim() === '' ? undefined : value;
-    const fallback = this.defaultRoute();
-    const provider = nonEmpty(route.provider) ?? nonEmpty(fallback.provider);
-    const model = nonEmpty(route.model) ?? nonEmpty(fallback.model);
-    const agentOptions: HostAgentOptions = {
-      ...(provider === undefined ? {} : { provider }),
-      ...(model === undefined ? {} : { model }),
-    };
+    const agentOptions = this.resolveRoute(route);
     const { agent } = await this.registry().create({
       sessionId,
       ...(cwd === undefined ? {} : { meta: { cwd } }),
