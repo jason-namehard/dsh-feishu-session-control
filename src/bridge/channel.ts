@@ -930,6 +930,10 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           chatId: event.chatId,
           threadId,
           currentScope,
+          // Without this the confirmation card cannot be settled, so a pressed
+          // button leaves the card exactly as it was and the only feedback is
+          // a toast that vanishes.
+          ...(event.messageId ? { messageId: event.messageId } : {}),
         });
       }
     },

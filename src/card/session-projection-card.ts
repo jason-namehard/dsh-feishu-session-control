@@ -73,14 +73,14 @@ export function renderSessionBindingConfirmCard(input: {
   const body = (locale: CardLocale) => {
     const zh = locale === 'zh_cn';
     const lines = [
-      zh ? '**确认披露并绑定历史会话**' : '**Confirm history disclosure and binding**',
+      zh ? '**确认切换到该会话**' : '**Confirm switching to this session**',
       '',
       `${zh ? '标题' : 'Title'}：**${safe(input.session.title ?? (zh ? '未命名会话' : 'Untitled session'), 256)}**`,
       `session：\`${safe(input.session.sessionId, 256)}\``,
       `${zh ? '工作空间' : 'Workspace'}：\`${safe(input.identity.workspaceCwd, 512)}\``,
       `${zh ? '更新时间' : 'Updated'}：${new Date(input.session.updatedAt).toLocaleString(zh ? 'zh-CN' : 'en-US')}`,
       `${zh ? '当前 scope' : 'Current scope'}：\`${safe(input.identity.scope, 512)}\``,
-      `${zh ? '即将回填' : 'Messages to backfill'}：${input.backfillCount}`,
+      `${zh ? '该会话已有消息' : 'Messages in this session'}：${input.backfillCount}`,
       ...(input.replacesScopeSession
         ? [zh ? `将替换当前绑定：\`${safe(input.replacesScopeSession, 256)}\`` : `Replaces current binding: \`${safe(input.replacesScopeSession, 256)}\``]
         : []),
@@ -88,7 +88,11 @@ export function renderSessionBindingConfirmCard(input: {
         ? [zh ? `⚠️ 独占迁移：将从旧目标 \`${safe(input.migratesFromScope, 512)}\` 解绑。` : `⚠️ Exclusive migration: the old target \`${safe(input.migratesFromScope, 512)}\` will be unbound.`]
         : []),
       '',
-      zh ? '确认前不会修改绑定，也不会发送历史。' : 'No binding changes or history disclosure occur before confirmation.',
+      // The switch is a routing change, not a replay: saying so on the card is
+      // what stops it reading like "and here comes the whole transcript".
+      zh
+        ? '确认后仅切换绑定：这些历史消息**不会**发到飞书，之后的新消息才会同步过来。'
+        : 'Confirming only switches the binding: this history is **not** posted to Feishu; only later messages are.',
     ];
     const value = {
       cmd: 'session-projection',
@@ -123,8 +127,8 @@ export function renderSessionBindingConfirmCard(input: {
     };
   };
   return localizedCard({
-    zhCn: { summary: '确认 DSH session 绑定', body: body('zh_cn') },
-    enUs: { summary: 'Confirm DSH session binding', body: body('en_us') },
+    zhCn: { summary: '确认切换 DSH 会话', body: body('zh_cn') },
+    enUs: { summary: 'Confirm DSH session switch', body: body('en_us') },
   });
 }
 

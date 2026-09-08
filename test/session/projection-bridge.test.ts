@@ -70,6 +70,38 @@ function assistant(seq: number, id: string, text: string, turn = 1): DshSessionE
 }
 
 describe('SessionProjectionBridge', () => {
+
+  it('binds without posting the transcript when history delivery is off', async () => {
+    // /use switches which session the chat writes to; it is not a request to
+    // re-read that session. The cursor must still land on the snapshot seq, or
+    // the next live event would drag the whole history in behind it.
+    const root = await mkdtemp(join(tmpdir(), 'dsh-lark-projection-bridge-'));
+    const store = new SessionProjectionStore(join(root, 'projection.json'));
+    await store.load();
+    const source = new FakeSource();
+    source.sessions = [
+      { sessionId: 's1', updatedAt: 20, running: false, blank: false, cwd: '/repo', title: 'Main' },
+    ];
+    source.events.set('s1', [user(0, 'u0', 'old question'), assistant(1, 'a1', 'old answer')]);
+    const sendCard = vi.fn(async (_chatId: string, _card: object) => `card-${sendCard.mock.calls.length}`);
+    const bridge = new SessionProjectionBridge({
+      source, store,
+      channel: { sendMarkdown: vi.fn(), sendCard, updateCard: vi.fn() },
+      limits: { backfillMessages: 20, backfillBytes: 64 * 1024, historyPageMessages: 100, streamUpdateMs: 400, reconnectMs: 1 },
+    });
+
+    const prepared = await bridge.prepare('s1', '/repo');
+    const result = await bridge.bindConfirmed({
+      scope: 'chat-a', workspaceCwd: '/repo', chatId: 'chat-a', prepared, deliverHistory: false,
+    });
+
+    expect(result.transcriptDelivered).toBe(true);
+    expect(sendCard).not.toHaveBeenCalled();
+    const binding = store.ownerOf('s1');
+    expect(binding?.pendingHistoryThroughSeq).toBeUndefined();
+    expect(binding?.lastProjectedSeq).toBe(prepared.snapshotSeq);
+  });
+
   it('filters selectors, bounds transcript, suppresses Feishu echo and finalizes one streamed card', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-lark-projection-bridge-'));
     const store = new SessionProjectionStore(join(root, 'projection.json'));

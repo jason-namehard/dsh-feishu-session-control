@@ -13,7 +13,11 @@ import type { CommandChannel, CommandContext } from './index.js';
 import type { PreparedSessionBinding, SessionProjectionBridge } from '../session/projection-bridge.js';
 import type { SessionProjectionStore } from '../session/projection-store.js';
 import type { SessionAliasManager } from '../session/alias-manager.js';
-import { renderSessionDeleteConfirmCard } from '../card/session-alias-card.js';
+import {
+  renderSessionDeleteConfirmCard,
+  renderSessionOutcomeCard,
+} from '../card/session-alias-card.js';
+import { log } from '../core/logger.js';
 
 interface PendingBinding {
   nonce: string;
@@ -49,6 +53,8 @@ export interface SessionProjectionActionInput {
   chatId: string;
   threadId: string | undefined;
   currentScope: string;
+  /** The card the button was pressed on, so its outcome can replace it. */
+  messageId?: string;
 }
 
 /** Explicit selector/confirmation workflow; no external activity can call bind. */
@@ -227,6 +233,8 @@ export class SessionProjectionController {
     try {
       this.requireAuthorized(requestedScope, input.chatId, mode, input.operatorId);
       if (action === 'select') {
+        // Not terminal: the selector stays, and the confirmation card it opens
+        // is the one that settles.
         const sessionId = typeof input.value.sessionId === 'string' ? input.value.sessionId : '';
         if (!sessionId || !workspaceCwd) throw new Error('invalid session selection');
         await this.prepareConfirmation({
@@ -250,17 +258,24 @@ export class SessionProjectionController {
       if (action === 'cancel') {
         clearTimeout(pending.timer);
         this.pending.delete(nonce);
-        return { toast: { type: 'info', content: '已取消，绑定和历史均未改变 / Cancelled; binding and history unchanged' } };
+        await this.settleCard(input, '已取消，绑定未改变。', 'Cancelled; the binding is unchanged.');
+        return { toast: { type: 'info', content: '已取消，绑定未改变 / Cancelled; binding unchanged' } };
       }
       if (action !== 'confirm') throw new Error('unknown session action');
       clearTimeout(pending.timer);
       this.pending.delete(nonce); // one-shot before any asynchronous side effect
-      const result = await this.deps.bridge.bindConfirmed({
+      await this.deps.bridge.bindConfirmed({
         scope: pending.scope,
         workspaceCwd: pending.workspaceCwd,
         chatId: pending.chatId,
         ...(pending.threadId ? { threadId: pending.threadId } : {}),
         prepared: pending.prepared,
+        // Switching a chat to another session must not replay that session's
+        // transcript into Feishu. Someone runs /use because they already know
+        // what the other window did; re-reading it back at them buries the
+        // chat and costs context for nothing. The binding still starts from
+        // the same snapshot cursor, so live messages continue from here.
+        deliverHistory: false,
         ...(this.deps.access.isAdmin(pending.actorId) ? { allowCrossScopeMigration: true } : {}),
         ...(pending.expectedOwner ? { expectedOwner: pending.expectedOwner } : {}),
         onBindingCommitted: () => {
@@ -274,11 +289,17 @@ export class SessionProjectionController {
           this.deps.sessions.set(pending.scope, pending.prepared.session.sessionId, pending.workspaceCwd);
         },
       });
-      return result.transcriptDelivered
-        ? { toast: { type: 'success', content: '绑定完成，历史已回填 / Bound and history backfilled' } }
-        : { toast: { type: 'info', content: '绑定完成，但历史卡发送失败；可重新绑定重试 / Bound, but history delivery failed; bind again to retry' } };
+      const title = pending.prepared.session.title?.trim() || pending.prepared.session.sessionId;
+      await this.settleCard(
+        input,
+        `✅ 已切换到 **${title}**，后续消息都发往这个会话（不回填历史）。`,
+        `✅ Switched to **${title}**. Later messages go to this session; no history was replayed.`,
+      );
+      return { toast: { type: 'success', content: '已切换会话 / Session switched' } };
     } catch (error) {
-      return { toast: { type: 'error', content: error instanceof Error ? error.message : String(error) } };
+      const message = error instanceof Error ? error.message : String(error);
+      await this.settleCard(input, `⚠️ 操作失败：${message}`, `⚠️ Failed: ${message}`);
+      return { toast: { type: 'error', content: message } };
     }
   }
 
@@ -328,6 +349,7 @@ export class SessionProjectionController {
       clearTimeout(pending.timer);
       this.pendingDeletions.delete(nonce);
       if (action === 'delete-cancel') {
+        await this.settleCard(input, '已取消，会话未被删除。', 'Cancelled; the session was not deleted.');
         return { toast: { type: 'info', content: 'Cancelled; session was not deleted' } };
       }
       if (action !== 'delete-confirm') throw new Error('unknown session deletion action');
@@ -343,13 +365,49 @@ export class SessionProjectionController {
       else await this.deps.bridge.deleteSession(pending.sessionId);
       this.deps.sessions.clearSessionId(pending.sessionId);
       await this.deps.store.removeSession(pending.sessionId);
+      const title = pending.session.title?.trim() || pending.alias;
       if (pending.mode === 'purge') {
         await this.deps.aliases.removeAlias(pending.alias);
+        await this.settleCard(
+          input,
+          `❌ 已永久删除 \`${pending.alias}\` · **${title}**，无法恢复。`,
+          `❌ Permanently deleted \`${pending.alias}\` · **${title}**. This cannot be undone.`,
+        );
         return { toast: { type: 'success', content: `Permanently deleted session ${pending.alias}` } };
       }
+      await this.settleCard(
+        input,
+        `🗑 已移入回收站：\`${pending.alias}\` · **${title}**，可在 DSH Web 会话管理器恢复。`,
+        `🗑 Moved \`${pending.alias}\` · **${title}** to the recycle bin; restore it from the DSH Web session manager.`,
+      );
       return { toast: { type: 'success', content: `Moved session ${pending.alias} to the recycle bin` } };
     } catch (error) {
-      return { toast: { type: 'error', content: error instanceof Error ? error.message : String(error) } };
+      const message = error instanceof Error ? error.message : String(error);
+      await this.settleCard(input, `⚠️ 操作失败：${message}`, `⚠️ Failed: ${message}`);
+      return { toast: { type: 'error', content: message } };
+    }
+  }
+
+  /**
+   * Replace a spent confirmation card with its outcome.
+   *
+   * Best-effort on purpose: the operation it reports has already happened, so
+   * a card that could not be updated (recalled, too old, channel without card
+   * updates) must not turn a completed deletion into a reported failure.
+   */
+  private async settleCard(
+    input: SessionProjectionActionInput,
+    zh: string,
+    en: string,
+  ): Promise<void> {
+    if (!input.messageId || !this.deps.channel.updateCard) return;
+    try {
+      await this.deps.channel.updateCard(input.messageId, renderSessionOutcomeCard({ zh, en }));
+    } catch (error) {
+      log.warn('session-projection', 'card-settle-failed', {
+        messageId: input.messageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

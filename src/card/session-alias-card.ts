@@ -90,3 +90,20 @@ export function renderSessionDeleteConfirmCard(input: {
 function safe(value: string, maxBytes: number): string {
   return truncateUtf8Safe(redactSecrets(value), maxBytes).replaceAll('```', '``\u200b`');
 }
+
+/**
+ * What a confirmation card becomes once its button has been pressed.
+ *
+ * A card whose buttons are still there after the operation ran reads as
+ * "nothing happened": the only feedback is a toast, which is gone in a second
+ * and never says which of several open cards it belonged to. Replacing the
+ * card body with the outcome — and dropping the buttons — is how the approval
+ * and update cards already settle, so /use, /delete and /purge now settle the
+ * same way.
+ */
+export function renderSessionOutcomeCard(input: { zh: string; en: string }): object {
+  return localizedCard({
+    zhCn: { summary: '会话操作结果', body: { elements: [{ tag: 'markdown', content: input.zh }] } },
+    enUs: { summary: 'Session action result', body: { elements: [{ tag: 'markdown', content: input.en }] } },
+  });
+}

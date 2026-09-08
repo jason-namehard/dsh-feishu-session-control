@@ -179,6 +179,14 @@ export class SessionProjectionBridge {
     prepared: PreparedSessionBinding;
     allowCrossScopeMigration?: boolean;
     expectedOwner?: { scope: string; workspaceCwd: string };
+    /**
+     * Whether to post the prepared transcript into the chat. Default true, for
+     * the disclosure-and-backfill flow. `/use` sets it false: an explicit
+     * switch binds the session without replaying it, and the cursor is still
+     * completed at the same snapshot seq so live projection resumes from here
+     * rather than from the start of the session.
+     */
+    deliverHistory?: boolean;
     /** Runs synchronously immediately after the exclusive durable claim. */
     onBindingCommitted?: (result: ExclusiveBindingResult) => void;
   }): Promise<ExclusiveBindingResult & { transcriptDelivered: boolean }> {
@@ -197,7 +205,9 @@ export class SessionProjectionBridge {
         ...(input.expectedOwner ? { expectedOwner: input.expectedOwner } : {}),
       });
       input.onBindingCommitted?.(result);
-      const transcriptDelivered = await this.deliverPreparedTranscript(result.binding, input.prepared);
+      const transcriptDelivered = input.deliverHistory === false
+        ? true
+        : await this.deliverPreparedTranscript(result.binding, input.prepared);
       if (transcriptDelivered) {
         await this.deps.store.completeInitialHistory(
           input.scope, input.workspaceCwd, result.binding.sessionId, input.prepared.snapshotSeq,
