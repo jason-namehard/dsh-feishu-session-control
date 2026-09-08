@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadRuntimeEnv } from '../../src/config/env.js';
 import {
+  guardianServiceFilePath,
   installGuardian,
   launchdPlist,
   readGuardianUnit,
@@ -129,5 +130,25 @@ describe('guardian service units', () => {
     const removed = await uninstallGuardian({ env, rootOverride: dir, run });
     expect(removed.ok).toBe(true);
     expect(await readGuardianUnit('linux', dir)).toBeUndefined();
+  });
+});
+
+describe('windows startup entry location', () => {
+  it('keeps an explicit root inside that root, instead of the live Startup folder', () => {
+    // A test that passed a temp home still resolved to %APPDATA%, so it wrote
+    // its `# unit` fixture over this machine's real guardian entry and the
+    // safety net silently stopped starting at login.
+    const sandbox = join(tmpdir(), 'guardian-root-fixture');
+    const path = guardianServiceFilePath('win32', sandbox);
+
+    expect(path.startsWith(sandbox)).toBe(true);
+    if (process.env.APPDATA) expect(path.startsWith(process.env.APPDATA)).toBe(false);
+  });
+
+  it('uses %APPDATA% for the real user home', () => {
+    const path = guardianServiceFilePath('win32', homedir());
+    const expected = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming');
+
+    expect(path.startsWith(expected)).toBe(true);
   });
 });

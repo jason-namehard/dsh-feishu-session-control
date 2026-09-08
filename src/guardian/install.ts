@@ -74,15 +74,18 @@ function serviceDirectory(platform: NodeJS.Platform, root: string): string {
       return join(root, '.config', 'systemd', 'user');
     case 'darwin':
       return join(root, 'Library', 'LaunchAgents');
-    case 'win32':
-      return join(
-        process.env.APPDATA ?? join(root, 'AppData', 'Roaming'),
-        'Microsoft',
-        'Windows',
-        'Start Menu',
-        'Programs',
-        'Startup',
-      );
+    case 'win32': {
+      // %APPDATA% is the right Roaming directory — but only for the real user,
+      // whose home `root` then is. Preferring it unconditionally made every
+      // caller that passes an explicit root escape into the live Startup
+      // folder: that is how a test running against a temp home overwrote this
+      // machine's actual guardian entry with its own fixture, silently
+      // disabling the safety net until the next reinstall.
+      const roaming = root === homedir()
+        ? process.env.APPDATA ?? join(root, 'AppData', 'Roaming')
+        : join(root, 'AppData', 'Roaming');
+      return join(roaming, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+    }
     default:
       return join(root, '.dsh-lark', 'guardian');
   }
