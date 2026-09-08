@@ -135,3 +135,27 @@ dsh 里时，这些数据直接从宿主服务读，不再走它自己的 HTTP A
 
 实测：DSH 启动后 `session-projection` 记录 `mux-connected`，无任何错误；此前这个
 category 每 5 秒刷一次 `web mux websocket connection failed`。
+
+## 飞书侧的权限与电脑端对等
+
+DSH 在电脑端的会话设置是 `permission/preset: danger-full-access` +
+`approval/policy: never`——它自己什么都不问。飞书侧之所以反复弹批准，是**桥接
+额外加的 plan-gate**，不是 DSH 在拦。
+
+`isHighRiskTool` 的判定范围包括 `run_code`、非简单 shell 命令、终端/diff 类
+工具，以及 `edit` / `delete` / `move` / `execute` 类操作——几乎覆盖所有真正
+干活的动作，所以一个多步任务会被打断很多次。
+
+关掉它即可获得与电脑端对等的权限：
+
+```text
+DSH_LARK_PLAN_GATE=off
+```
+
+已写入 `启动DSH.bat` 和 `dsh-tray.ps1`，两条启动路径都生效。
+
+需要清楚代价：这一层原本是为「手机丢了怎么办」准备的——飞书是远程入口，
+gate 关掉后，任何能用你飞书的人就拥有和坐在这台电脑前一样的能力。这是
+deployment 层面的取舍，不是代码缺陷。想恢复只需删掉那一行，或设为 `strict`。
+
+工具层的策略拒绝（`checkPermissionPolicy`）不受影响，仍然生效。
