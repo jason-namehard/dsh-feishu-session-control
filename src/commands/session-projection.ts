@@ -13,11 +13,7 @@ import type { CommandChannel, CommandContext } from './index.js';
 import type { PreparedSessionBinding, SessionProjectionBridge } from '../session/projection-bridge.js';
 import type { SessionProjectionStore } from '../session/projection-store.js';
 import type { SessionAliasManager } from '../session/alias-manager.js';
-import {
-  renderSessionDeleteConfirmCard,
-  renderSessionOutcomeCard,
-} from '../card/session-alias-card.js';
-import { log } from '../core/logger.js';
+import { renderSessionDeleteConfirmCard } from '../card/session-alias-card.js';
 
 interface PendingBinding {
   nonce: string;
@@ -45,6 +41,20 @@ interface PendingDeletion {
   threadId?: string;
   expiresAt: number;
   timer: NodeJS.Timeout;
+}
+
+export interface SessionProjectionActionResult {
+  toast: { type: 'success' | 'info' | 'error'; content: string };
+  /**
+   * Markdown for the spent card's outcome, when the action was terminal.
+   *
+   * The channel settles the card with it — replying, then recalling — rather
+   * than patching the card in place: `im.v1.message.patch` returns its failure
+   * as a response code the SDK never raises, so a patch that does nothing is
+   * indistinguishable from one that worked. Reply-and-recall is the path the
+   * approval and /upgrade cards already take, and it is visibly correct.
+   */
+  settle?: string;
 }
 
 export interface SessionProjectionActionInput {
@@ -218,7 +228,7 @@ export class SessionProjectionController {
     return alias;
   }
 
-  async handleAction(input: SessionProjectionActionInput): Promise<{ toast: { type: 'success' | 'info' | 'error'; content: string } }> {
+  async handleAction(input: SessionProjectionActionInput): Promise<SessionProjectionActionResult> {
     if (input.value.cmd === 'session-alias') return this.handleAliasAction(input);
     this.pruneExpired();
     const action = typeof input.value.action === 'string' ? input.value.action : '';
@@ -258,8 +268,10 @@ export class SessionProjectionController {
       if (action === 'cancel') {
         clearTimeout(pending.timer);
         this.pending.delete(nonce);
-        await this.settleCard(input, '已取消，绑定未改变。', 'Cancelled; the binding is unchanged.');
-        return { toast: { type: 'info', content: '已取消，绑定未改变 / Cancelled; binding unchanged' } };
+        return {
+          toast: { type: 'info', content: '已取消，绑定未改变 / Cancelled; binding unchanged' },
+          settle: bilingualMarkdown('已取消，绑定未改变。', 'Cancelled; the binding is unchanged.'),
+        };
       }
       if (action !== 'confirm') throw new Error('unknown session action');
       clearTimeout(pending.timer);
@@ -290,16 +302,19 @@ export class SessionProjectionController {
         },
       });
       const title = pending.prepared.session.title?.trim() || pending.prepared.session.sessionId;
-      await this.settleCard(
-        input,
-        `✅ 已切换到 **${title}**，后续消息都发往这个会话（不回填历史）。`,
-        `✅ Switched to **${title}**. Later messages go to this session; no history was replayed.`,
-      );
-      return { toast: { type: 'success', content: '已切换会话 / Session switched' } };
+      return {
+        toast: { type: 'success', content: '已切换会话 / Session switched' },
+        settle: bilingualMarkdown(
+          `✅ 已切换到 **${title}**，后续消息都发往这个会话（不回填历史）。`,
+          `✅ Switched to **${title}**. Later messages go to this session; no history was replayed.`,
+        ),
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.settleCard(input, `⚠️ 操作失败：${message}`, `⚠️ Failed: ${message}`);
-      return { toast: { type: 'error', content: message } };
+      return {
+        toast: { type: 'error', content: message },
+        settle: bilingualMarkdown(`⚠️ 操作失败：${message}`, `⚠️ Failed: ${message}`),
+      };
     }
   }
 
@@ -321,7 +336,7 @@ export class SessionProjectionController {
     this.pendingDeletions.clear();
   }
 
-  private async handleAliasAction(input: SessionProjectionActionInput): Promise<{ toast: { type: 'success' | 'info' | 'error'; content: string } }> {
+  private async handleAliasAction(input: SessionProjectionActionInput): Promise<SessionProjectionActionResult> {
     this.pruneExpired();
     if (!this.deps.aliases) return { toast: { type: 'error', content: 'session aliases are not configured' } };
     const action = typeof input.value.action === 'string' ? input.value.action : '';
@@ -349,8 +364,10 @@ export class SessionProjectionController {
       clearTimeout(pending.timer);
       this.pendingDeletions.delete(nonce);
       if (action === 'delete-cancel') {
-        await this.settleCard(input, '已取消，会话未被删除。', 'Cancelled; the session was not deleted.');
-        return { toast: { type: 'info', content: 'Cancelled; session was not deleted' } };
+        return {
+          toast: { type: 'info', content: 'Cancelled; session was not deleted' },
+          settle: bilingualMarkdown('已取消，会话未被删除。', 'Cancelled; the session was not deleted.'),
+        };
       }
       if (action !== 'delete-confirm') throw new Error('unknown session deletion action');
       if (this.deps.aliases.getSessionId(pending.alias) !== pending.sessionId) {
@@ -368,48 +385,30 @@ export class SessionProjectionController {
       const title = pending.session.title?.trim() || pending.alias;
       if (pending.mode === 'purge') {
         await this.deps.aliases.removeAlias(pending.alias);
-        await this.settleCard(
-          input,
-          `❌ 已永久删除 \`${pending.alias}\` · **${title}**，无法恢复。`,
-          `❌ Permanently deleted \`${pending.alias}\` · **${title}**. This cannot be undone.`,
-        );
-        return { toast: { type: 'success', content: `Permanently deleted session ${pending.alias}` } };
+        return {
+          toast: { type: 'success', content: `Permanently deleted session ${pending.alias}` },
+          settle: bilingualMarkdown(
+            `❌ 已永久删除 \`${pending.alias}\` · **${title}**，无法恢复。`,
+            `❌ Permanently deleted \`${pending.alias}\` · **${title}**. This cannot be undone.`,
+          ),
+        };
       }
-      await this.settleCard(
-        input,
-        `🗑 已移入回收站：\`${pending.alias}\` · **${title}**，可在 DSH Web 会话管理器恢复。`,
-        `🗑 Moved \`${pending.alias}\` · **${title}** to the recycle bin; restore it from the DSH Web session manager.`,
-      );
-      return { toast: { type: 'success', content: `Moved session ${pending.alias} to the recycle bin` } };
+      return {
+        toast: { type: 'success', content: `Moved session ${pending.alias} to the recycle bin` },
+        settle: bilingualMarkdown(
+          `🗑 已移入回收站：\`${pending.alias}\` · **${title}**，可在 DSH Web 会话管理器恢复。`,
+          `🗑 Moved \`${pending.alias}\` · **${title}** to the recycle bin; restore it from the DSH Web session manager.`,
+        ),
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.settleCard(input, `⚠️ 操作失败：${message}`, `⚠️ Failed: ${message}`);
-      return { toast: { type: 'error', content: message } };
+      return {
+        toast: { type: 'error', content: message },
+        settle: bilingualMarkdown(`⚠️ 操作失败：${message}`, `⚠️ Failed: ${message}`),
+      };
     }
   }
 
-  /**
-   * Replace a spent confirmation card with its outcome.
-   *
-   * Best-effort on purpose: the operation it reports has already happened, so
-   * a card that could not be updated (recalled, too old, channel without card
-   * updates) must not turn a completed deletion into a reported failure.
-   */
-  private async settleCard(
-    input: SessionProjectionActionInput,
-    zh: string,
-    en: string,
-  ): Promise<void> {
-    if (!input.messageId || !this.deps.channel.updateCard) return;
-    try {
-      await this.deps.channel.updateCard(input.messageId, renderSessionOutcomeCard({ zh, en }));
-    } catch (error) {
-      log.warn('session-projection', 'card-settle-failed', {
-        messageId: input.messageId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
 
   private async prepareConfirmation(input: {
     sessionId: string;

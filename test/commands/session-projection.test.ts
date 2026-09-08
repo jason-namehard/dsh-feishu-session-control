@@ -153,10 +153,11 @@ describe('/session explicit binding workflow', () => {
     expect(f.aliases.getSessionId('0905-1')).toBeUndefined();
   });
 
-  it('replaces a spent confirmation card with its outcome instead of leaving the buttons', async () => {
+  it('reports an outcome for the spent confirmation card, so the channel can settle it', async () => {
     // A card that still shows its buttons after the deletion ran is
     // indistinguishable from one that did nothing: the toast is gone in a
-    // second and never says which card it belonged to.
+    // second and never says which card it belonged to. The channel settles
+    // the card by replying and recalling it — the path approval cards take.
     const f = await fixture();
     f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
     await f.aliases.registerSession('s1');
@@ -165,19 +166,13 @@ describe('/session explicit binding workflow', () => {
     }));
     const nonce = [...JSON.stringify(f.sendCard.mock.calls.at(-1)?.[1]).matchAll(/"nonce":"([^"]+)"/gu)][0]?.[1];
 
-    await f.controller.handleAction({
+    const outcome = await f.controller.handleAction({
       value: { cmd: 'session-alias', action: 'delete-confirm', alias: '0905-1', nonce, scope: 'chat-a', workspaceCwd: '/repo', actorId: 'user-a' },
       operatorId: 'user-a', chatId: 'chat-a', threadId: undefined, currentScope: 'chat-a',
-      messageId: 'om-card-1',
     });
 
-    expect(f.updateCard).toHaveBeenCalledOnce();
-    const [messageId, settled] = f.updateCard.mock.calls[0]!;
-    expect(messageId).toBe('om-card-1');
-    const rendered = JSON.stringify(settled);
-    expect(rendered).toContain('回收站');
-    // No button survives, so the card cannot be pressed a second time.
-    expect(rendered).not.toContain('"tag":"button"');
+    expect(outcome.settle).toContain('回收站');
+    expect(outcome.toast.type).toBe('success');
   });
 
   it('switches the binding without replaying the other session into the chat', async () => {
@@ -194,7 +189,6 @@ describe('/session explicit binding workflow', () => {
     const confirmed = await f.controller.handleAction({
       value: { cmd: 'session-projection', action: 'confirm', nonce, scope: 'chat-a', workspaceCwd: '/repo', actorId: 'user-a' },
       operatorId: 'user-a', chatId: 'chat-a', threadId: undefined, currentScope: 'chat-a',
-      messageId: 'om-card-2',
     });
 
     expect(confirmed.toast.type).toBe('success');
@@ -202,10 +196,8 @@ describe('/session explicit binding workflow', () => {
     expect(f.bridge.bindConfirmed).toHaveBeenCalledWith(
       expect.objectContaining({ deliverHistory: false }),
     );
-    // And the pending card resolves to a plain result.
-    const rendered = JSON.stringify(f.updateCard.mock.calls[0]?.[1]);
-    expect(rendered).toContain('已切换');
-    expect(rendered).not.toContain('"tag":"button"');
+    // And the pending card has an outcome to be settled with.
+    expect(confirmed.settle).toContain('已切换');
   });
 
   it('requires profile admin for group/topic but permits the owner of a member scope', async () => {

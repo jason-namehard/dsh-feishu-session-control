@@ -925,18 +925,25 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         }
         return;
       }
-      if (value?.cmd === 'session-projection' && sessionProjection) {
-        return sessionProjection.handleAction({
+      // Both session card families land here. `session-alias` was missing:
+      // /delete and /purge sent their buttons with that cmd, nothing matched
+      // it, and the handler fell off the end — the press was logged as
+      // received and then silently discarded, which is why those two cards
+      // never did anything at all.
+      if ((value?.cmd === 'session-projection' || value?.cmd === 'session-alias') && sessionProjection) {
+        const outcome = await sessionProjection.handleAction({
           value,
           operatorId: event.operator?.openId,
           chatId: event.chatId,
           threadId,
           currentScope,
-          // Without this the confirmation card cannot be settled, so a pressed
-          // button leaves the card exactly as it was and the only feedback is
-          // a toast that vanishes.
-          ...(event.messageId ? { messageId: event.messageId } : {}),
         });
+        if (outcome.settle && event.messageId) {
+          void settleActionCard(
+            channel, event.chatId, event.messageId, threadId, outcome.settle, scope, 'session',
+          );
+        }
+        return { toast: outcome.toast };
       }
     },
     reconnecting: () => {
@@ -1123,7 +1130,7 @@ async function settleActionCard(
   threadId: string | undefined,
   markdown: string,
   scope: string,
-  kind: 'approval' | 'question' | 'plan' | 'secret' | 'channel-upgrade',
+  kind: 'approval' | 'question' | 'plan' | 'secret' | 'channel-upgrade' | 'session',
 ): Promise<void> {
   try {
     await channel.send(chatId, { markdown }, {
