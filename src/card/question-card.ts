@@ -38,6 +38,59 @@ function formElement(input: QuestionCardInput, locale: CardLocale): object {
 }
 
 /**
+ * Single choice, laid out as numbered buttons under the options themselves.
+ *
+ * The dropdown this replaces put every option behind a tap: on a phone the
+ * card showed a question and an empty "Choose…" control, so the choice could
+ * not be read and compared without opening it, and a long option was clipped
+ * inside the control. Here the full text of each option is in the card body,
+ * numbered, and the buttons are just `[1] [2] [3]` — short enough to sit on
+ * one row whatever the options say.
+ *
+ * These buttons carry the choice in their own action value, so they submit on
+ * press and need no form wrapper.
+ */
+function singleChoiceElements(input: QuestionCardInput, locale: CardLocale): object[] {
+  const zh = locale === 'zh_cn';
+  const options = input.options ?? [];
+  const value = {
+    cmd: 'question-submit',
+    id: input.id,
+    ...(input.actionScope ? { scope: input.actionScope } : {}),
+  };
+  return [
+    {
+      tag: 'markdown',
+      content: options
+        .map((option, index) => `**[${index + 1}]** ${option}`)
+        .join('\n\n'),
+    },
+    {
+      tag: 'column_set',
+      flex_mode: 'none',
+      horizontal_spacing: 'default',
+      columns: options.map((_option, index) => ({
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          type: index === 0 ? 'primary' : 'default',
+          text: { tag: 'plain_text', content: `${index + 1}` },
+          // The answer travels with the button, not through a form value.
+          value: { ...value, choice: `option-${index}` },
+        }],
+      })),
+    },
+    {
+      tag: 'markdown',
+      content: zh
+        ? `_按 1–${options.length} 选择，或直接回复本卡片补充说明。_`
+        : `_Press 1–${options.length}, or reply to this card with a note._`,
+    },
+  ];
+}
+
+/**
  * Structured question card: single choice, multi choice, or free text.
  * The input/select and its submit button are wrapped in a `form` container —
  * schema 2.0 only returns the selected/filled value in the callback when the
@@ -47,6 +100,20 @@ export function renderQuestionCard(input: QuestionCardInput): object {
   const body = (locale: CardLocale) => ({
       elements: [
         { tag: 'markdown', content: `❓ ${input.question}` },
+        ...(input.kind === 'single' && (input.options?.length ?? 0) > 0
+          ? singleChoiceElements(input, locale)
+          : formBodyElements(input, locale)),
+      ],
+    });
+  return localizedCard({
+    zhCn: { summary: '问题', body: body('zh_cn') },
+    enUs: { summary: 'Question', body: body('en_us') },
+  });
+}
+
+/** Multi-choice and free text still need the form wrapper to return a value. */
+function formBodyElements(input: QuestionCardInput, locale: CardLocale): object[] {
+  return [
         {
           tag: 'markdown',
           content: locale === 'zh_cn'
@@ -72,12 +139,7 @@ export function renderQuestionCard(input: QuestionCardInput): object {
             },
           ],
         },
-      ],
-    });
-  return localizedCard({
-    zhCn: { summary: '问题', body: body('zh_cn') },
-    enUs: { summary: 'Question', body: body('en_us') },
-  });
+  ];
 }
 
 /**

@@ -822,9 +822,11 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         const question = deps.questions.get(scope, value.id);
         const form = event.action.formValue;
         if (question) {
+          // Single choice arrives on the numbered button itself; multi-choice
+          // and free text still come back through the form.
           const answer = extractQuestionAnswer(
             question.kind,
-            form?.answer,
+            typeof value.choice === 'string' ? value.choice : form?.answer,
             question.options,
           );
           const settled = deps.questions.resolve(scope, value.id, answer);

@@ -6,7 +6,9 @@ import {
 
 describe('question cards', () => {
   it('renders text, single and multi variants', () => {
-    for (const kind of ['text', 'single', 'multi'] as const) {
+    // Single choice is buttons, not a form: its options must be readable in
+    // the card body without opening a dropdown.
+    for (const kind of ['text', 'multi'] as const) {
       const card = renderQuestionCard({
         id: 'q-1',
         kind,
@@ -22,6 +24,31 @@ describe('question cards', () => {
       const form = card.body.elements.find((element) => element.tag === 'form');
       expect(form?.elements).toBeDefined();
     }
+  });
+
+  it('lays single choice out as body text plus short numbered buttons', () => {
+    // A dropdown showed an empty "Choose…" control: the options could not be
+    // read or compared without opening it, and long ones were clipped inside.
+    const card = renderQuestionCard({
+      id: 'q-ab',
+      kind: 'single',
+      question: 'A or B?',
+      options: ['keep the desktop behaviour', 'never ask on Feishu'],
+      actionScope: 'chat:member:u1',
+    }) as { body: { elements: Array<{ tag: string; content?: string; columns?: unknown[] }> } };
+    const content = JSON.stringify(card);
+
+    // Full option text in the body, numbered to match the buttons.
+    expect(content).toContain('**[1]** keep the desktop behaviour');
+    expect(content).toContain('**[2]** never ask on Feishu');
+    // The buttons say only the number, so the row fits however long the
+    // options are, and each carries its own answer.
+    expect(content).toContain('"content":"1"');
+    expect(content).toContain('"choice":"option-0"');
+    expect(content).toContain('"choice":"option-1"');
+    expect(content).toContain('"scope":"chat:member:u1"');
+    // No form: the button submits by itself.
+    expect(card.body.elements.some((element) => element.tag === 'form')).toBe(false);
   });
 
   it('wraps the input and submit button in a form for schema 2.0', () => {
