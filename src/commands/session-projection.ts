@@ -127,31 +127,40 @@ export class SessionProjectionController {
       })));
       const byId = new Map(sessions.map((session) => [session.sessionId, session]));
       const entries = this.deps.aliases.entries().filter((entry) => byId.has(entry.sessionId));
-      const zh = ['**DSH 会话列表**', ''];
-      const en = ['**DSH sessions**', ''];
+      // Which session this chat is bound to right now. Without it the list is
+      // a set of options with no "you are here", so there is no way to tell
+      // what /use would be switching away from.
+      const boundCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
+      const boundSessionId = this.deps.store.get(ctx.scope, boundCwd)?.sessionId;
+      // Rendered once, not bilingually: every line is aliases, titles and ids,
+      // which read identically in both languages, so a bilingual list repeated
+      // the whole thing and looked like the bot had sent two cards.
+      const lines = ['**DSH 会话列表 · Sessions**', ''];
       if (entries.length === 0) {
-        zh.push('暂无可用会话。');
-        en.push('No sessions are available.');
+        lines.push('暂无可用会话 · No sessions available.');
       } else {
         let currentDate = '';
         for (const entry of entries) {
           const datePrefix = entry.alias.slice(0, 4);
           if (datePrefix !== currentDate) {
             currentDate = datePrefix;
-            zh.push(`**${datePrefix}**`);
-            en.push(`**${datePrefix}**`);
+            lines.push(`**${datePrefix}**`);
           }
           const session = byId.get(entry.sessionId)!;
-          const title = session.title?.trim() || '未命名会话';
-          const statusZh = session.trashed ? '回收站' : session.running ? '运行中' : '空闲';
-          const statusEn = session.trashed ? 'recycle bin' : session.running ? 'running' : 'idle';
-          zh.push(`- \`${entry.alias}\` · **${title}** · ${statusZh} · \`${entry.sessionId}\``);
-          en.push(`- \`${entry.alias}\` · **${title}** · ${statusEn} · \`${entry.sessionId}\``);
+          const title = session.title?.trim() || '未命名会话 · untitled';
+          const status = session.trashed
+            ? '🗑 回收站'
+            : session.running ? '▶ 运行中' : '· 空闲';
+          const here = entry.sessionId === boundSessionId ? ' ← **当前对话**' : '';
+          lines.push(`- \`${entry.alias}\` · **${title}** · ${status}${here}`);
+        }
+        if (boundSessionId === undefined) {
+          lines.push('', '当前对话尚未绑定会话，用 `/use <别名>` 绑定一个。');
         }
       }
       await ctx.channel.sendMarkdown(
         ctx.chatId,
-        bilingualMarkdown(zh.join('\n'), en.join('\n'), ctx.languagePolicies?.get().plain),
+        lines.join('\n'),
         this.options(ctx.threadId),
       );
       return;
