@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
   renderSessionBindingConfirmCard,
-  renderSessionSelectorCard,
   type SessionActionIdentity,
 } from '../card/session-projection-card.js';
 import { bilingualMarkdown } from '../card/i18n.js';
@@ -98,51 +97,7 @@ export class SessionProjectionController {
     channel: CommandChannel;
     aliases?: SessionAliasManager;
     confirmationTtlMs?: number;
-    selectorLimit?: number;
   }) {}
-
-  async handleCommand(args: string, ctx: CommandContext): Promise<void> {
-    const actorId = this.requireAuthorized(ctx.scope, ctx.chatId, ctx.chatMode, ctx.senderId);
-    const workspaceCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
-    const tokens = args.trim().split(/\s+/).filter(Boolean);
-    if (tokens[0] === 'current') {
-      const current = this.deps.store.get(ctx.scope, workspaceCwd);
-      await ctx.channel.sendMarkdown(ctx.chatId, current
-        ? bilingualMarkdown(
-            `当前显式绑定：\`${current.sessionId}\`\n\nscope：\`${ctx.scope}\`\nworkspace：\`${workspaceCwd}\``,
-            `Current explicit binding: \`${current.sessionId}\`\n\nscope: \`${ctx.scope}\`\nworkspace: \`${workspaceCwd}\``,
-          )
-        : bilingualMarkdown('当前 scope + workspace 尚未绑定 DSH session。', 'No DSH session is bound to this scope + workspace.'),
-      this.options(ctx.threadId));
-      return;
-    }
-    const requestedId = tokens[0] === 'bind' ? tokens[1] : undefined;
-    if (tokens.length > 0 && !requestedId) {
-      throw new Error('用法：/session [current|bind <sessionId>]');
-    }
-    if (requestedId) {
-      await this.prepareConfirmation({
-        sessionId: requestedId,
-        identity: { scope: ctx.scope, workspaceCwd, actorId },
-        chatId: ctx.chatId,
-        ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
-      });
-      return;
-    }
-    const sessions = (await this.deps.bridge.eligibleSessions(workspaceCwd)).slice(0, this.deps.selectorLimit ?? 10);
-    if (sessions.length === 0) {
-      await ctx.channel.sendMarkdown(ctx.chatId, bilingualMarkdown(
-        '当前 canonical workspace 没有可绑定的普通 DSH session。',
-        'No selectable regular DSH session exists in the current canonical workspace.',
-      ), this.options(ctx.threadId));
-      return;
-    }
-    if (!ctx.channel.sendCard) throw new Error('当前渠道不支持 session 选择卡片');
-    await ctx.channel.sendCard(ctx.chatId, renderSessionSelectorCard({
-      sessions,
-      identity: { scope: ctx.scope, workspaceCwd, actorId },
-    }), this.options(ctx.threadId));
-  }
 
   async handleAliasCommand(command: 'sessions' | 'use' | 'delete' | 'purge', args: string, ctx: CommandContext): Promise<void> {
     if (!this.deps.aliases) throw new Error('session aliases are not configured');
@@ -160,11 +115,21 @@ export class SessionProjectionController {
       })));
       const byId = new Map(sessions.map((session) => [session.sessionId, session]));
       const entries = this.deps.aliases.entries().filter((entry) => byId.has(entry.sessionId));
-      // Which session this chat is bound to right now. Without it the list is
-      // a set of options with no "you are here", so there is no way to tell
-      // what /use would be switching away from.
+      // Which session this chat is actually talking to. Two places can know:
+      // the projection store, written only when /use confirms a switch, and the
+      // run-flow's own session map, written whenever a turn runs — including
+      // the very first message in a fresh chat, which mints a session without
+      // anyone choosing it.
+      //
+      // Reading only the projection store is why a brand-new group showed no
+      // current session: dsh had created one and the Web UI listed it, but
+      // nothing had been *confirmed*, so /sessions marked nothing and told you
+      // to bind — while the chat had in fact been using that session all along.
+      // It only started reporting correctly after a /use, which is exactly the
+      // symptom. The run-flow map is the broader truth, so it is the fallback.
       const boundCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
-      const boundSessionId = this.deps.store.get(ctx.scope, boundCwd)?.sessionId;
+      const boundSessionId = this.deps.store.get(ctx.scope, boundCwd)?.sessionId
+        ?? this.deps.sessions.resumeFor(ctx.scope, boundCwd);
       // Rendered once, not bilingually: every line is aliases, titles and ids,
       // which read identically in both languages, so a bilingual list repeated
       // the whole thing and looked like the bot had sent two cards.
@@ -188,7 +153,12 @@ export class SessionProjectionController {
           lines.push(`- \`${entry.alias}\` · **${title}** · ${status}${here}`);
         }
         if (boundSessionId === undefined) {
-          lines.push('', '当前对话尚未绑定会话，用 `/use <别名>` 绑定一个。');
+          lines.push('', '当前对话还没有会话，发一条消息会自动新建一个，或用 `/use <别名>` 绑到已有的。');
+        } else if (!entries.some((entry) => entry.sessionId === boundSessionId)) {
+          // The chat is on a session the alias list does not cover — a
+          // different workspace, or one already in the recycle bin. Saying so
+          // beats silently marking nothing, which reads as "not bound".
+          lines.push('', `当前对话的会话不在上面的列表里（\`${boundSessionId}\`），可能属于其它工作空间。`);
         }
       }
       await ctx.channel.sendMarkdown(
@@ -396,19 +366,6 @@ export class SessionProjectionController {
     const mode = entry?.chatMode ?? (input.threadId ? 'topic' : 'group');
     try {
       this.requireAuthorized(requestedScope, input.chatId, mode, input.operatorId);
-      if (action === 'select') {
-        // Not terminal: the selector stays, and the confirmation card it opens
-        // is the one that settles.
-        const sessionId = typeof input.value.sessionId === 'string' ? input.value.sessionId : '';
-        if (!sessionId || !workspaceCwd) throw new Error('invalid session selection');
-        await this.prepareConfirmation({
-          sessionId,
-          identity: { scope: requestedScope, workspaceCwd, actorId: input.operatorId },
-          chatId: input.chatId,
-          ...(input.threadId ? { threadId: input.threadId } : {}),
-        });
-        return { toast: { type: 'info', content: '请检查披露范围并确认 / Review and confirm disclosure' } };
-      }
       const nonce = typeof input.value.nonce === 'string' ? input.value.nonce : '';
       const pending = this.pending.get(nonce);
       if (!pending || pending.expiresAt <= Date.now() ||

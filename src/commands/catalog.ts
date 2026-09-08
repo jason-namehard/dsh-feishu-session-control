@@ -21,7 +21,6 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { names: ['/upgrade'], area: 'operations', zh: '检查并确认机器人自更新（管理员）', en: 'check and confirm a bot self-update (admin)' },
   { names: ['/doctor'], area: 'operations', zh: '生成脱敏诊断包（管理员）', en: 'generate a redacted diagnostic bundle (admin)' },
   { names: ['/resume'], area: 'session', zh: '查看当前会话最近上下文', en: 'show recent context for this session' },
-  { names: ['/session'], area: 'session', zh: '`[current|bind <sessionId>]` — 显式绑定 DSH session', en: '`[current|bind <sessionId>]` — explicitly bind a DSH session' },
   { names: ['/stop'], area: 'operations', zh: '终止当前 scope 的任务', en: 'stop tasks in the current scope' },
   { names: ['/timeout'], area: 'operations', zh: '`[N|off|default]` — 查看或设置空闲超时', en: '`[N|off|default]` — view or set idle timeout' },
   { names: ['/concurrency'], area: 'operations', zh: '`[N|default]` — 查看或设置 scope 并行数', en: '`[N|default]` — view or set scope concurrency' },

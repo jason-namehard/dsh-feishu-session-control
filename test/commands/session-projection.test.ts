@@ -84,20 +84,7 @@ function commandContext(input: {
   } as unknown as CommandContext;
 }
 
-describe('/session explicit binding workflow', () => {
-  it('shows metadata-only selector in p2p and sends no history before confirmation', async () => {
-    const f = await fixture();
-    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
-    await f.controller.handleCommand('', commandContext({
-      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
-    }));
-    const selector = JSON.stringify(f.sendCard.mock.calls[0]?.[1]);
-    expect(selector).toContain('Release');
-    expect(selector).toContain('s1');
-    expect(selector).not.toContain('secret history');
-    expect(f.bridge.bindConfirmed).not.toHaveBeenCalled();
-  });
-
+describe('session alias commands', () => {
   it('lists stable aliases and creates a native session for /new-style callers', async () => {
     const f = await fixture();
     f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
@@ -272,16 +259,54 @@ describe('/session explicit binding workflow', () => {
     expect(f.bridge.renameSession).not.toHaveBeenCalled();
   });
 
+  it('marks the session a chat is actually on, even when no /use ever confirmed it', async () => {
+    // A brand-new chat mints a session on its first message: dsh creates it,
+    // the Web UI lists it, and the run-flow records it — but nothing was
+    // *confirmed*, so the projection store is empty. Reading only that store
+    // made /sessions mark nothing and say "not bound", while the chat had been
+    // using that session all along; it only looked right after a /use.
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    f.sessions.set('chat-a', 's1', '/repo');
+    expect(f.store.get('chat-a', '/repo')).toBeUndefined();
+
+    await f.controller.handleAliasCommand('sessions', '', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+
+    const listing = f.sendMarkdown.mock.calls.at(-1)?.[1] as unknown as string;
+    expect(listing).toContain('← **当前对话**');
+    expect(listing).not.toContain('还没有会话');
+  });
+
+  it('says so when the chat is on a session the alias list does not cover', async () => {
+    // Silently marking nothing is indistinguishable from "not bound", which is
+    // the confusion this whole fix is about.
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    f.sessions.set('chat-a', 'session-from-another-workspace', '/repo');
+
+    await f.controller.handleAliasCommand('sessions', '', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+
+    const listing = f.sendMarkdown.mock.calls.at(-1)?.[1] as unknown as string;
+    expect(listing).toContain('不在上面的列表里');
+    expect(listing).toContain('session-from-another-workspace');
+  });
+
   it('requires profile admin for group/topic but permits the owner of a member scope', async () => {
     const f = await fixture();
-    await expect(f.controller.handleCommand('', commandContext({
+    await expect(f.controller.handleAliasCommand('sessions', '', commandContext({
       controller: f.controller, scope: 'chat-g', chatId: 'chat-g', chatMode: 'group', senderId: 'member-a',
     }))).rejects.toThrow('仅管理员');
     f.scopes.register('chat-g:member:member-a', 'chat-g', undefined, 'group', 'incoming');
-    await expect(f.controller.handleCommand('', commandContext({
+    await expect(f.controller.handleAliasCommand('sessions', '', commandContext({
       controller: f.controller, scope: 'chat-g:member:member-a', chatId: 'chat-g', chatMode: 'group', senderId: 'member-a',
     }))).resolves.toBeUndefined();
-    await expect(f.controller.handleCommand('', commandContext({
+    await expect(f.controller.handleAliasCommand('sessions', '', commandContext({
       controller: f.controller, scope: 'chat-g:member:member-a', chatId: 'chat-g', chatMode: 'group', senderId: 'member-b',
     }))).rejects.toThrow('本人');
   });
@@ -289,14 +314,12 @@ describe('/session explicit binding workflow', () => {
   it('freezes actor/scope/workspace in a one-shot confirmation and binds only after confirm', async () => {
     const f = await fixture(['admin-a']);
     f.scopes.register('chat-g:thread-a', 'chat-g', 'thread-a', 'topic', 'incoming');
-    const selected = await f.controller.handleAction({
-      value: {
-        cmd: 'session-projection', action: 'select', sessionId: 's1',
-        scope: 'chat-g:thread-a', workspaceCwd: '/repo', actorId: 'admin-a',
-      },
-      operatorId: 'admin-a', chatId: 'chat-g', threadId: 'thread-a', currentScope: 'chat-g:thread-a',
+    await f.aliases.registerSession('s1');
+    await f.controller.handleAliasCommand('use', '0905-1', {
+      ...commandContext({
+        controller: f.controller, scope: 'chat-g:thread-a', chatId: 'chat-g', chatMode: 'topic', senderId: 'admin-a',
+      }),
     });
-    expect(selected.toast.type).toBe('info');
     expect(f.bridge.bindConfirmed).not.toHaveBeenCalled();
     const confirmation = f.sendCard.mock.calls[0]?.[1];
     const serialized = JSON.stringify(confirmation);
@@ -334,7 +357,8 @@ describe('/session explicit binding workflow', () => {
       scope: 'chat-old', workspaceCwd: '/repo', sessionId: 's1', chatId: 'chat-old', initialSeq: 5,
     });
     f.scopes.register('chat-new', 'chat-new', undefined, 'p2p', 'incoming');
-    await expect(f.controller.handleCommand('bind s1', commandContext({
+    await f.aliases.registerSession('s1');
+    await expect(f.controller.handleAliasCommand('use', '0905-1', commandContext({
       controller: f.controller, scope: 'chat-new', chatId: 'chat-new', chatMode: 'p2p', senderId: 'user-new',
     }))).rejects.toThrow('仅 profile 管理员');
     expect(f.bridge.prepare).not.toHaveBeenCalled();
@@ -343,17 +367,18 @@ describe('/session explicit binding workflow', () => {
 
   it('rechecks current user/chat allowlists for commands and stale card actions', async () => {
     const f = await fixture(['admin-a'], ['admin-a'], ['chat-allowed']);
-    await expect(f.controller.handleCommand('', commandContext({
+    await expect(f.controller.handleAliasCommand('sessions', '', commandContext({
       controller: f.controller, scope: 'chat-private', chatId: 'chat-private', chatMode: 'p2p', senderId: 'revoked-user',
     }))).rejects.toThrow('用户白名单');
 
     f.scopes.register('chat-blocked:thread-a', 'chat-blocked', 'thread-a', 'topic', 'incoming');
     const blocked = await f.controller.handleAction({
       value: {
-        cmd: 'session-projection', action: 'select', sessionId: 's1',
+        cmd: 'session-rename', action: 'rename-submit', alias: '0905-1', nonce: 'stale',
         scope: 'chat-blocked:thread-a', workspaceCwd: '/repo', actorId: 'admin-a',
       },
       operatorId: 'admin-a', chatId: 'chat-blocked', threadId: 'thread-a', currentScope: 'chat-blocked:thread-a',
+      formValue: { title: 'from a chat that lost its allowlist entry' },
     });
     expect(blocked.toast).toEqual(expect.objectContaining({ type: 'error', content: expect.stringContaining('群聊白名单') }));
     expect(f.bridge.prepare).not.toHaveBeenCalled();
@@ -362,7 +387,8 @@ describe('/session explicit binding workflow', () => {
   it('rejects a stale disclosure and clears the displaced SessionStore mapping after admin migration', async () => {
     const stale = await fixture();
     stale.scopes.register('chat-new', 'chat-new', undefined, 'p2p', 'incoming');
-    await stale.controller.handleCommand('bind s1', commandContext({
+    await stale.aliases.registerSession('s1');
+    await stale.controller.handleAliasCommand('use', '0905-1', commandContext({
       controller: stale.controller, scope: 'chat-new', chatId: 'chat-new', chatMode: 'p2p', senderId: 'user-new',
     }));
     const staleCard = JSON.stringify(stale.sendCard.mock.calls[0]?.[1]);
@@ -384,7 +410,8 @@ describe('/session explicit binding workflow', () => {
     });
     admin.sessions.set('chat-old', 's1', '/repo');
     await admin.sessions.flush();
-    await admin.controller.handleCommand('bind s1', commandContext({
+    await admin.aliases.registerSession('s1');
+    await admin.controller.handleAliasCommand('use', '0905-1', commandContext({
       controller: admin.controller, scope: 'chat-new', chatId: 'chat-new', chatMode: 'p2p', senderId: 'admin-a',
     }));
     const adminCard = JSON.stringify(admin.sendCard.mock.calls[0]?.[1]);

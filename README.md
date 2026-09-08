@@ -48,7 +48,7 @@ dsh web                                             # ② 在同一个前台进�
 
 - **安全网守护**：dsh 崩溃后飞书仍会回复你，`/safemode` 进入仅核心安全模式直接自愈；重启后自动恢复排队任务，`/jobs` 可显式重试。多数桥接方案是「串行单聊 + 崩溃就失联」。
 - **多机器人可信交接**：`bot add` 增加独立实例，可信机器人在同群真实 @ 交接，连续协作有上限。
-- **统一的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/session`、`/sessions`、`/use`、`/delete`、`/purge` 通过稳定别名管理 DSH 会话；Web 端同时提供归档、恢复、回收站、永久清理、详情和跨工作区移动，不再要求额外安装多个会话插件。
+- **统一的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/sessions`、`/use`、`/rename`、`/delete`、`/purge` 通过稳定别名跨工作空间管理 DSH 会话；Web 端同时提供归档、恢复、回收站、永久清理、详情和跨工作区移动，不再要求额外安装多个会话插件。
 - **完善的版本管理机制**：管理员直接在飞书发 `/upgrade` 后台更新、验证并重载；有新版本才提醒，不打断当前工作。
 - **dsh Web 可视化设置**：官方 Settings → Plugins 页面点选工作目录、模型、并行数、提醒，不用背环境变量。
 
@@ -71,9 +71,11 @@ dsh web                                             # ② 在同一个前台进�
 | 命令 | 作用 |
 | --- | --- |
 | `/config` | 模型 / Provider / 凭据管理卡片（`/model`、`/provider(s)`、`/key` 为同一张卡的别名） |
-| `/new` `/reset` | 开始新会话 |
-| `/sessions` | 列出 DSH 会话及稳定别名（`MMDD-N`） |
-| `/use <alias>` | 通过别名切换 DSH 会话（需确认） |
+| `/new [名称]` `/reset` | 开始新会话；不带名称会弹出命名卡片（留空即用 DSH 默认命名） |
+| `/sessions` | 列出 DSH 会话及稳定别名（`MMDD-N`），并标出当前对话所在会话 |
+| `/use <alias>` | 通过别名切换 DSH 会话（需确认，不回填历史） |
+| `/rename <alias> [名称]` | 给会话命名，Web 端同步显示；不带名称会弹出命名卡片 |
+| `/mention on\|off\|default [chatId]` | 本群（或指定群）是否必须 @ 机器人才回复（管理员） |
 | `/delete <alias>` | 通过别名将 DSH 会话移入回收站（需二次确认） |
 | `/purge <alias>` | 通过别名永久清理 DSH 会话（需二次确认） |
 | `/status` | 查看状态卡（工作区 / 模型 / session / run / token / 任务账本） |
@@ -81,7 +83,6 @@ dsh web                                             # ② 在同一个前台进�
 | `/cd <path>` | 切到该目录的独立会话 |
 | `/ws list\|save\|use\|remove` | 管理命名工作空间 |
 | `/jobs [list\|show\|retry]` | 对账并重试排队/运行/失败/中断任务 |
-| `/session`、`/session bind` | 浏览 / 显式绑定 DSH session |
 | `/role list\|show\|set\|clear` | 查看 / 绑定角色 |
 | `/notify <scope\|chatId> <text>` | 跨会话发送通知（管理员） |
 | `/notifications [show\|off\|on …]` | 配置完成 / 失败 / 审批提醒（`sinks=` 转发到其他 IM 渠道） |

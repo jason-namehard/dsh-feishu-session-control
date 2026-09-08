@@ -202,7 +202,6 @@ const HELP = [
   '- `/upgrade` — 检查并确认机器人自更新（管理员）',
   '- `/doctor` — 生成脱敏诊断包并作为文件发送（管理员）',
   '- `/resume` — 查看当前会话最近上下文',
-  '- `/session [current|bind <sessionId>]` — 显式选择、确认并绑定当前 workspace 的 DSH session',
   '- `/sessions` — 列出 DSH 会话与固定别名',
   '- `/use <MMDD-N>` — 确认后切换到指定会话（不回填历史）',
   '- `/delete <MMDD-N>` — 确认后将会话移入回收站',
@@ -252,7 +251,6 @@ const HELP_EN = [
   '- `/upgrade` — check and confirm a bot self-update (admin)',
   '- `/doctor` — generate and send a redacted diagnostic bundle (admin)',
   '- `/resume` — show recent context for this session',
-  '- `/session [current|bind <sessionId>]` — explicitly select, confirm, and bind a DSH session in this workspace',
   '- `/sessions` — list DSH sessions and stable aliases',
   '- `/use <MMDD-N>` — switch to a named DSH session after confirmation',
   '- `/delete <MMDD-N>` — move a named DSH session to the recycle bin after confirmation',
@@ -1456,24 +1454,6 @@ async function handleSecret(args: string, ctx: CommandContext): Promise<void> {
   await reply(ctx, '已发送仅限你提交的安全表单；请勿在普通消息中粘贴密钥。', 'A secure owner-only form was sent. Do not paste the secret into ordinary chat.');
 }
 
-async function handleSessionProjection(args: string, ctx: CommandContext): Promise<void> {
-  if (!ctx.sessionProjection) {
-    await reply(
-      ctx,
-      '当前 adapter 不提供 DSH session 投影。session 管理需要 DSH 自己的会话：'
-        + '把桥接作为插件跑在 dsh 里（默认，DSH_LARK_ADAPTER=web/host），'
-        + '或指向一个可访问的 dsh web。sdk / acp / headless 各自驱动独立 runtime，没有可投影的 DSH session 列表。',
-      'The current adapter does not provide DSH session projection. Session '
-        + 'management needs the sessions dsh itself owns: run the bridge as a plugin '
-        + 'inside dsh (the default, DSH_LARK_ADAPTER=web/host), or point it at a '
-        + 'reachable dsh web. sdk / acp / headless each drive their own runtime and '
-        + 'have no dsh session list to project.',
-    );
-    return;
-  }
-  await ctx.sessionProjection.handleCommand(args, ctx);
-}
-
 async function handleSessionAliases(
   command: 'sessions' | 'use' | 'delete' | 'purge',
   args: string,
@@ -1514,7 +1494,6 @@ const handlers: Record<string, Handler> = {
   '/upgrade': handleUpgrade,
   '/doctor': handleDoctor,
   '/resume': handleResume,
-  '/session': handleSessionProjection,
   '/sessions': (args, ctx) => handleSessionAliases('sessions', args, ctx),
   '/use': (args, ctx) => handleSessionAliases('use', args, ctx),
   '/delete': (args, ctx) => handleSessionAliases('delete', args, ctx),

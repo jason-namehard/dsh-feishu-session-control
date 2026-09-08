@@ -8,60 +8,6 @@ export interface SessionActionIdentity {
   actorId: string;
 }
 
-export function renderSessionSelectorCard(input: {
-  sessions: DshSessionSummary[];
-  identity: SessionActionIdentity;
-}): object {
-  const body = (locale: CardLocale) => {
-    const zh = locale === 'zh_cn';
-    return {
-      elements: [
-        {
-          tag: 'markdown',
-          content: [
-            zh ? '**选择要绑定的 DSH session**' : '**Select a DSH session to bind**',
-            '',
-            zh ? `工作空间：\`${safe(input.identity.workspaceCwd, 512)}\`` : `Workspace: \`${safe(input.identity.workspaceCwd, 512)}\``,
-            zh ? '列表只包含当前工作空间的普通 session，不展示消息正文。' : 'Only regular sessions in this workspace are listed; message bodies are hidden.',
-          ].join('\n'),
-        },
-        ...input.sessions.map((session) => ({
-          tag: 'column_set',
-          flex_mode: 'none',
-          horizontal_spacing: 'default',
-          columns: [{
-            tag: 'column',
-            width: 'weighted',
-            weight: 4,
-            elements: [{
-              tag: 'markdown',
-              content: `**${safe(session.title ?? (zh ? '未命名会话' : 'Untitled session'), 256)}**\n\`${safe(session.sessionId, 256)}\` · ${new Date(session.updatedAt).toLocaleString(zh ? 'zh-CN' : 'en-US')}`,
-            }],
-          }, {
-            tag: 'column',
-            width: 'auto',
-            elements: [{
-              tag: 'button',
-              text: { tag: 'plain_text', content: zh ? '选择' : 'Select' },
-              type: 'primary',
-              value: {
-                cmd: 'session-projection',
-                action: 'select',
-                sessionId: session.sessionId,
-                ...input.identity,
-              },
-            }],
-          }],
-        })),
-      ],
-    };
-  };
-  return localizedCard({
-    zhCn: { summary: '选择 DSH session', body: body('zh_cn') },
-    enUs: { summary: 'Select a DSH session', body: body('en_us') },
-  });
-}
-
 export function renderSessionBindingConfirmCard(input: {
   nonce: string;
   session: DshSessionSummary;
