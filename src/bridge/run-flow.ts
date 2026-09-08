@@ -709,11 +709,18 @@ async function runAttempt(
             // The card used to carry the failure. Without it a failed run
             // would end in silence, which reads exactly like a run still in
             // progress — the one thing an acknowledgement must never imply.
+            // Carry the reason, not just the verdict. Without the card there
+            // is nowhere else it shows, and a bare "failed" forces a trip to
+            // the desktop logs to learn anything at all.
+            const detail = state.errorMsg?.trim();
+            const suffix = detail === undefined || detail === '' ? '' : `
+
+\`${detail}\``;
             const reason = state.terminal === 'interrupted'
               ? bilingualMarkdown('⏹️ 已中断。', '⏹️ Interrupted.')
               : state.terminal === 'idle_timeout'
                 ? bilingualMarkdown('⏱️ 超时结束。', '⏱️ Timed out.')
-                : bilingualMarkdown('⚠️ 执行失败。', '⚠️ Run failed.');
+                : bilingualMarkdown(`⚠️ 执行失败。${suffix}`, `⚠️ Run failed.${suffix}`);
             try {
               await input.channel.sendMarkdown(input.chatId, reason, { ...replyOptions });
             } catch (error) {

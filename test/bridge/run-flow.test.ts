@@ -199,7 +199,11 @@ describe('runAgentBatch', () => {
     });
 
     // Silence after an acknowledgement reads exactly like "still working".
-    expect(feishu.messages.join(' ')).toContain('执行失败');
+    const said = feishu.messages.join(' ');
+    expect(said).toContain('执行失败');
+    // And it must say why: with no card, this notice is the only place
+    // the reason appears at all.
+    expect(said).toContain('tool exploded');
   });
 
   it('still renders the progress card when it is asked for', async () => {
