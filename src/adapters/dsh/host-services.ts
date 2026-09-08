@@ -82,6 +82,11 @@ interface HostSessionQuery {
   readTitleSnapshot?(id: HostSessionId): Promise<{ title?: string } | undefined>;
 }
 
+interface HostAgentPresets {
+  resolve(id?: string): Promise<{ id: string }>;
+  mount(agentCtx: unknown, id?: string): Promise<unknown>;
+}
+
 interface HostDefaultModel {
   currentSelection(): { provider?: string; model?: string } | undefined;
 }
@@ -100,12 +105,14 @@ export interface HostAgentOptions {
 interface HostAgentRegistry {
   create(options: {
     sessionId: HostSessionId;
-    meta?: { cwd?: string };
+    meta?: { cwd?: string; agentPreset?: string };
     agentOptions?: HostAgentOptions;
+    setup?: (agentCtx: unknown) => Promise<void> | void;
   }): Promise<{ agent: HostAgent; dispose(): Promise<void> }>;
   resume(options: {
     resumeSessionId: HostSessionId;
     agentOptions?: HostAgentOptions;
+    setup?: (agentCtx: unknown) => Promise<void> | void;
   }): Promise<{ agent: HostAgent; dispose(): Promise<void> }>;
   get(id: HostSessionId): HostAgent | undefined;
   list(): HostAgent[];
@@ -254,9 +261,14 @@ export class HostServices {
       // session it was loaded from. Passing it only on create left every
       // existing session — which is every chat already bound to one — failing
       // on its next turn.
+      // A resumed agent is composed from scratch too, so it needs the same
+      // preset mount as a created one — otherwise resuming a session strips
+      // its tools.
+      const composition = await this.composition();
       return (await registry.resume({
         resumeSessionId: sessionId,
         agentOptions: this.resolveRoute(route),
+        ...(composition === undefined ? {} : { setup: composition.setup }),
       })).agent;
     } catch {
       // A deleted, purged or unreadable session is a caller-visible miss, not
@@ -305,10 +317,16 @@ export class HostServices {
     // DSH_LARK_MODEL leaves it empty), and an agent created with no route at
     // all cannot resolve `{{model}}` during prompt assembly.
     const agentOptions = this.resolveRoute(route);
+    const composition = await this.composition();
+    const meta = {
+      ...(cwd === undefined ? {} : { cwd }),
+      ...(composition?.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
+    };
     const { agent } = await this.registry().create({
       sessionId,
-      ...(cwd === undefined ? {} : { meta: { cwd } }),
+      ...(Object.keys(meta).length === 0 ? {} : { meta }),
       ...(Object.keys(agentOptions).length === 0 ? {} : { agentOptions }),
+      ...(composition === undefined ? {} : { setup: composition.setup }),
     });
     return agent;
   }
@@ -384,6 +402,40 @@ export class HostServices {
       const title = snapshot?.title?.trim();
       return title === undefined || title === '' ? undefined : title;
     } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Build the agent-composition callback dsh runs while an agent is still
+   * unpublished.
+   *
+   * This is where an agent gets its tools. dsh's own session controller mounts
+   * an agent preset here; skipping it produced agents that could only send
+   * messages — `write`, `read`, `glob` and `pwsh` all came back as
+   * "unknown tool", which reads like a broken session rather than a missing
+   * setup callback.
+   *
+   * @returns the preset id and its mount callback, or undefined when this host
+   *   registers no preset service (then dsh's own default composition applies).
+   */
+  private async composition(): Promise<{
+    agentPreset?: string;
+    setup: (agentCtx: unknown) => Promise<void>;
+  } | undefined> {
+    const presets = service(this.ctx, 'agentPresets') as HostAgentPresets | undefined;
+    if (!presets || !isFn(presets.resolve) || !isFn(presets.mount)) return undefined;
+    try {
+      const resolved = await presets.resolve();
+      return {
+        agentPreset: resolved.id,
+        setup: async (agentCtx: unknown) => {
+          await presets.mount(agentCtx, resolved.id);
+        },
+      };
+    } catch {
+      // A preset that cannot be resolved must not block the session: dsh
+      // falls back to its own composition when no setup is supplied.
       return undefined;
     }
   }
