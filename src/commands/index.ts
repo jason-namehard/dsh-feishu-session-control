@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises';
+import { log } from '../core/logger.js';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ActiveRuns } from '../bot/active-runs.js';
@@ -189,7 +190,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 const HELP = [
   '**dsh-lark-bot 命令**',
   '',
-  '- `/new` `/reset` — 开始新会话',
+  '- `/new [名称]` `/reset` — 开始新会话；不带名称会弹出命名卡片（留空即用 DSH 默认命名）',
   '- `/newg <群名>` — 自动新建群聊（拉你入群）并开新会话，当前会话保留',
   '- `/cd <path>` — 切换到该目录的独立会话（切回可继续）',
   '- `/ws list|save <name>|use <name>|remove <name>` — 管理工作空间',
@@ -200,6 +201,11 @@ const HELP = [
   '- `/doctor` — 生成脱敏诊断包并作为文件发送（管理员）',
   '- `/resume` — 查看当前会话最近上下文',
   '- `/session [current|bind <sessionId>]` — 显式选择、确认并绑定当前 workspace 的 DSH session',
+  '- `/sessions` — 列出 DSH 会话与固定别名',
+  '- `/use <MMDD-N>` — 确认后切换到指定会话（不回填历史）',
+  '- `/delete <MMDD-N>` — 确认后将会话移入回收站',
+  '- `/purge <MMDD-N>` — 确认后永久删除会话',
+  '- `/rename <MMDD-N> [名称]` — 给会话命名，网页端同步显示；不带名称会弹出命名卡片',
   '- `/stop` — 终止当前任务',
   '- `/timeout [N|off|default]` — 查看或设置当前会话空闲超时（持续无活动事件 N 分钟才终止）',
   '- `/concurrency [N|default]` — 查看或设置当前 scope 的并行任务数',
@@ -234,7 +240,7 @@ const HELP = [
 const HELP_EN = [
   '**dsh-lark-bot commands**',
   '',
-  '- `/new` `/reset` — start a new session',
+  '- `/new [name]` `/reset` — start a new session; without a name a naming card appears (submit it empty to keep dsh’s own naming)',
   '- `/newg <name>` — create a group, add you, and start a separate session',
   '- `/cd <path>` — switch to that directory’s independent session',
   '- `/ws list|save <name>|use <name>|remove <name>` — manage workspaces',
@@ -249,6 +255,7 @@ const HELP_EN = [
   '- `/use <MMDD-N>` — switch to a named DSH session after confirmation',
   '- `/delete <MMDD-N>` — move a named DSH session to the recycle bin after confirmation',
   '- `/purge <MMDD-N>` — permanently delete a named DSH session after confirmation',
+  '- `/rename <MMDD-N> [name]` — name a DSH session; the Web UI shows the same name',
   '- `/stop` — stop current tasks',
   '- `/timeout [N|off|default]` — view or set the idle timeout',
   '- `/concurrency [N|default]` — view or set parallel runs for this scope',
@@ -290,17 +297,23 @@ async function reply(ctx: CommandContext, zhCn: string, enUs?: string): Promise<
   });
 }
 
-async function handleNew(_args: string, ctx: CommandContext): Promise<void> {
+async function handleNew(args: string, ctx: CommandContext): Promise<void> {
   const cwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
   const interrupted = await ctx.activeRuns.interruptWorkspace(ctx.scope, cwd);
   ctx.sessions.clear(ctx.scope, cwd);
   let zhMessage = interrupted > 0 ? `已中断 ${String(interrupted)} 个任务并开始新会话。` : '已开始新会话。';
   let enMessage = interrupted > 0 ? `Interrupted ${String(interrupted)} task(s) and started a new session.` : 'Started a new session.';
+  // Naming happens after the confirmation is sent, so a slow rename or a card
+  // this channel cannot render never delays the session itself.
+  let newAlias: string | undefined;
+  let requestedName = '';
   if (ctx.sessionProjection && ctx.sessionAliases) {
     try {
       const alias = await ctx.sessionProjection.createNewSession(ctx, cwd);
       zhMessage += ` 别名：\`${alias}\`。`;
       enMessage += ` Alias: \`${alias}\`.`;
+      requestedName = args.trim();
+      newAlias = alias;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       zhMessage += ` 但别名创建失败：${detail}`;
@@ -312,6 +325,36 @@ async function handleNew(_args: string, ctx: CommandContext): Promise<void> {
     zhMessage,
     enMessage,
   );
+  if (newAlias !== undefined && ctx.sessionProjection) {
+    // `/new 名称` names it outright; a bare `/new` offers the input card, where
+    // submitting empty means "keep dsh's own naming".
+    try {
+      if (requestedName !== '') {
+        await ctx.sessionProjection.handleRenameCommand(`${newAlias} ${requestedName}`, ctx);
+      } else {
+        const actorId = ctx.senderId;
+        const sessionId = ctx.sessionAliases?.getSessionId(newAlias);
+        if (actorId && sessionId) {
+          await ctx.sessionProjection.offerName({
+            alias: newAlias,
+            sessionId,
+            actorId,
+            scope: ctx.scope,
+            workspaceCwd: cwd,
+            chatId: ctx.chatId,
+            ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+            fresh: true,
+          });
+        }
+      }
+    } catch (error) {
+      // The session exists and is already bound; naming is a convenience.
+      log.warn('command-new', 'naming-unavailable', {
+        scope: ctx.scope,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   try {
     // A new session is an explicit user boundary, so probe once even when the
     // process-wide update cache is warm. Failure is intentionally silent: it
@@ -1383,6 +1426,18 @@ async function handleSessionAliases(
   await ctx.sessionProjection.handleAliasCommand(command, args, ctx);
 }
 
+async function handleRename(args: string, ctx: CommandContext): Promise<void> {
+  if (!ctx.sessionProjection || !ctx.sessionAliases) {
+    await reply(
+      ctx,
+      '当前 adapter 未提供会话别名管理；请使用 `web` adapter 并确认 Web host 可用。',
+      'The current adapter does not provide session aliases; use the `web` adapter and ensure the Web host is reachable.',
+    );
+    return;
+  }
+  await ctx.sessionProjection.handleRenameCommand(args, ctx);
+}
+
 const handlers: Record<string, Handler> = {
   '/new': handleNew,
   '/reset': handleNew,
@@ -1400,6 +1455,7 @@ const handlers: Record<string, Handler> = {
   '/use': (args, ctx) => handleSessionAliases('use', args, ctx),
   '/delete': (args, ctx) => handleSessionAliases('delete', args, ctx),
   '/purge': (args, ctx) => handleSessionAliases('purge', args, ctx),
+  '/rename': handleRename,
   '/stop': handleStop,
   '/timeout': handleTimeout,
   '/concurrency': handleConcurrency,

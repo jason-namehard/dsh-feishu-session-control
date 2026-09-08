@@ -13,7 +13,10 @@ import type { CommandChannel, CommandContext } from './index.js';
 import type { PreparedSessionBinding, SessionProjectionBridge } from '../session/projection-bridge.js';
 import type { SessionProjectionStore } from '../session/projection-store.js';
 import type { SessionAliasManager } from '../session/alias-manager.js';
-import { renderSessionDeleteConfirmCard } from '../card/session-alias-card.js';
+import {
+  renderSessionDeleteConfirmCard,
+  renderSessionNameCard,
+} from '../card/session-alias-card.js';
 
 interface PendingBinding {
   nonce: string;
@@ -43,6 +46,19 @@ interface PendingDeletion {
   timer: NodeJS.Timeout;
 }
 
+interface PendingRename {
+  nonce: string;
+  alias: string;
+  sessionId: string;
+  actorId: string;
+  scope: string;
+  workspaceCwd: string;
+  chatId: string;
+  threadId?: string;
+  expiresAt: number;
+  timer: NodeJS.Timeout;
+}
+
 export interface SessionProjectionActionResult {
   toast: { type: 'success' | 'info' | 'error'; content: string };
   /**
@@ -63,14 +79,15 @@ export interface SessionProjectionActionInput {
   chatId: string;
   threadId: string | undefined;
   currentScope: string;
-  /** The card the button was pressed on, so its outcome can replace it. */
-  messageId?: string;
+  /** Form fields the card submitted, for cards that collect input. */
+  formValue?: Record<string, unknown>;
 }
 
 /** Explicit selector/confirmation workflow; no external activity can call bind. */
 export class SessionProjectionController {
   private readonly pending = new Map<string, PendingBinding>();
   private readonly pendingDeletions = new Map<string, PendingDeletion>();
+  private readonly pendingRenames = new Map<string, PendingRename>();
 
   constructor(private readonly deps: {
     bridge: SessionProjectionBridge;
@@ -219,6 +236,142 @@ export class SessionProjectionController {
     });
   }
 
+  /**
+   * `/rename <MMDD-N> [name]` — with a name, set it; without one, open the
+   * card so the name can be typed without retyping the alias.
+   */
+  async handleRenameCommand(args: string, ctx: CommandContext): Promise<void> {
+    if (!this.deps.aliases) throw new Error('session aliases are not configured');
+    const actorId = this.requireAuthorized(ctx.scope, ctx.chatId, ctx.chatMode, ctx.senderId);
+    const trimmed = args.trim();
+    const [alias, ...rest] = trimmed.split(/\s+/u).filter(Boolean);
+    if (!alias) throw new Error('Usage: /rename <MMDD-N> [新名称]');
+    const sessionId = this.deps.aliases.getSessionId(alias);
+    if (!sessionId) throw new Error(`alias not found: ${alias}`);
+    const session = (await this.deps.bridge.listSessions()).find((item) => item.sessionId === sessionId);
+    if (!session) {
+      await this.deps.aliases.removeAlias(alias);
+      throw new Error(`session for alias ${alias} was already deleted`);
+    }
+    const workspaceCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
+    const requested = rest.join(' ').trim();
+    if (requested !== '') {
+      const accepted = await this.deps.bridge.renameSession(sessionId, requested);
+      await ctx.channel.sendMarkdown(ctx.chatId, bilingualMarkdown(
+        `✏️ 已重命名 \`${alias}\` 为 **${accepted}**，网页端同步显示。`,
+        `✏️ Renamed \`${alias}\` to **${accepted}**; the Web UI shows it too.`,
+      ), this.options(ctx.threadId));
+      return;
+    }
+    await this.offerName({
+      alias,
+      sessionId,
+      ...(session.title === undefined ? {} : { currentTitle: session.title }),
+      actorId,
+      scope: ctx.scope,
+      workspaceCwd,
+      chatId: ctx.chatId,
+      ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+    });
+  }
+
+  /**
+   * Send the name card for one session and remember what it may rename.
+   *
+   * The card carries only a nonce; the alias, session, actor and scope it is
+   * allowed to touch are held here, so a card cannot be replayed against a
+   * different session or by a different person.
+   */
+  async offerName(input: {
+    alias: string;
+    sessionId: string;
+    currentTitle?: string;
+    actorId: string;
+    scope: string;
+    workspaceCwd: string;
+    chatId: string;
+    threadId?: string;
+    fresh?: boolean;
+  }): Promise<void> {
+    if (!this.deps.channel.sendCard) throw new Error('当前渠道不支持命名卡片');
+    const nonce = randomUUID();
+    const expiresAt = Date.now() + (this.deps.confirmationTtlMs ?? 10 * 60_000);
+    const timer = setTimeout(() => this.pendingRenames.delete(nonce), expiresAt - Date.now());
+    timer.unref?.();
+    this.pendingRenames.set(nonce, {
+      nonce,
+      alias: input.alias,
+      sessionId: input.sessionId,
+      actorId: input.actorId,
+      scope: input.scope,
+      workspaceCwd: input.workspaceCwd,
+      chatId: input.chatId,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      expiresAt,
+      timer,
+    });
+    await this.deps.channel.sendCard(input.chatId, renderSessionNameCard({
+      alias: input.alias,
+      sessionId: input.sessionId,
+      ...(input.currentTitle === undefined ? {} : { currentTitle: input.currentTitle }),
+      nonce,
+      scope: input.scope,
+      workspaceCwd: input.workspaceCwd,
+      actorId: input.actorId,
+      ...(input.fresh ? { fresh: true } : {}),
+    }), this.options(input.threadId));
+  }
+
+  private async handleRenameAction(input: SessionProjectionActionInput): Promise<SessionProjectionActionResult> {
+    this.pruneExpired();
+    const requestedScope = typeof input.value.scope === 'string' ? input.value.scope : '';
+    const cardActor = typeof input.value.actorId === 'string' ? input.value.actorId : '';
+    if (!input.operatorId || input.operatorId !== cardActor || requestedScope !== input.currentScope) {
+      return { toast: { type: 'error', content: '身份或 scope 不匹配 / Operator or scope mismatch' } };
+    }
+    const entry = this.deps.scopes.entry(requestedScope);
+    const mode = entry?.chatMode ?? (input.threadId ? 'topic' : 'group');
+    try {
+      this.requireAuthorized(requestedScope, input.chatId, mode, input.operatorId);
+      const nonce = typeof input.value.nonce === 'string' ? input.value.nonce : '';
+      const pending = this.pendingRenames.get(nonce);
+      if (!pending || pending.expiresAt <= Date.now() || pending.actorId !== input.operatorId ||
+          pending.scope !== requestedScope || pending.chatId !== input.chatId ||
+          pending.threadId !== input.threadId) {
+        if (pending) clearTimeout(pending.timer);
+        this.pendingRenames.delete(nonce);
+        throw new Error('naming card expired or no longer matches its original target');
+      }
+      clearTimeout(pending.timer);
+      this.pendingRenames.delete(nonce);
+      const title = typeof input.formValue?.title === 'string' ? input.formValue.title.trim() : '';
+      // An empty submit is a real answer: keep whatever dsh named it.
+      if (title === '') {
+        return {
+          toast: { type: 'info', content: '已保留 DSH 默认命名 / Kept dsh’s own naming' },
+          settle: bilingualMarkdown(
+            `保留 DSH 默认命名，未修改 \`${pending.alias}\`。`,
+            `Kept dsh’s own naming; \`${pending.alias}\` is unchanged.`,
+          ),
+        };
+      }
+      const accepted = await this.deps.bridge.renameSession(pending.sessionId, title);
+      return {
+        toast: { type: 'success', content: `Renamed ${pending.alias}` },
+        settle: bilingualMarkdown(
+          `✏️ \`${pending.alias}\` 已命名为 **${accepted}**，网页端同步显示。`,
+          `✏️ \`${pending.alias}\` is now **${accepted}**; the Web UI shows it too.`,
+        ),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        toast: { type: 'error', content: message },
+        settle: bilingualMarkdown(`⚠️ 命名失败：${message}`, `⚠️ Naming failed: ${message}`),
+      };
+    }
+  }
+
   async createNewSession(ctx: CommandContext, workspaceCwd: string): Promise<string> {
     if (!this.deps.aliases) throw new Error('session aliases are not configured');
     const sessionId = await this.deps.bridge.createSession(workspaceCwd);
@@ -230,6 +383,7 @@ export class SessionProjectionController {
 
   async handleAction(input: SessionProjectionActionInput): Promise<SessionProjectionActionResult> {
     if (input.value.cmd === 'session-alias') return this.handleAliasAction(input);
+    if (input.value.cmd === 'session-rename') return this.handleRenameAction(input);
     this.pruneExpired();
     const action = typeof input.value.action === 'string' ? input.value.action : '';
     const requestedScope = typeof input.value.scope === 'string' ? input.value.scope : '';
@@ -334,6 +488,8 @@ export class SessionProjectionController {
     this.pending.clear();
     for (const pending of this.pendingDeletions.values()) clearTimeout(pending.timer);
     this.pendingDeletions.clear();
+    for (const pending of this.pendingRenames.values()) clearTimeout(pending.timer);
+    this.pendingRenames.clear();
   }
 
   private async handleAliasAction(input: SessionProjectionActionInput): Promise<SessionProjectionActionResult> {
@@ -540,6 +696,12 @@ export class SessionProjectionController {
       if (pending.expiresAt <= now) {
         clearTimeout(pending.timer);
         this.pendingDeletions.delete(nonce);
+      }
+    }
+    for (const [nonce, pending] of this.pendingRenames) {
+      if (pending.expiresAt <= now) {
+        clearTimeout(pending.timer);
+        this.pendingRenames.delete(nonce);
       }
     }
   }

@@ -930,13 +930,17 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       // it, and the handler fell off the end — the press was logged as
       // received and then silently discarded, which is why those two cards
       // never did anything at all.
-      if ((value?.cmd === 'session-projection' || value?.cmd === 'session-alias') && sessionProjection) {
+      if ((value?.cmd === 'session-projection' || value?.cmd === 'session-alias' ||
+           value?.cmd === 'session-rename') && sessionProjection) {
         const outcome = await sessionProjection.handleAction({
           value,
           operatorId: event.operator?.openId,
           chatId: event.chatId,
           threadId,
           currentScope,
+          // The name card collects its value in a form, so the typed title
+          // arrives here rather than on the button.
+          ...(event.action.formValue ? { formValue: event.action.formValue } : {}),
         });
         if (outcome.settle && event.messageId) {
           void settleActionCard(

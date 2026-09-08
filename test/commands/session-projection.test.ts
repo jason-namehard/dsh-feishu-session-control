@@ -31,6 +31,7 @@ async function fixture(
     listSessions: vi.fn(async () => deleted ? [] : [{ ...session, ...(trashed ? { trashed: true } : {}) }]),
     createSession: vi.fn(async () => 's2'),
     deleteSession: vi.fn(async () => { trashed = true; return { ok: true, trashed: true }; }),
+    renameSession: vi.fn(async (_id: string, title: string) => title.trim().slice(0, 40)),
     purgeSession: vi.fn(async () => { deleted = true; return { ok: true, purged: true }; }),
     prepare: vi.fn(async () => prepared),
     bindConfirmed: vi.fn(async (input: Parameters<SessionProjectionBridge['bindConfirmed']>[0]) => {
@@ -198,6 +199,77 @@ describe('/session explicit binding workflow', () => {
     );
     // And the pending card has an outcome to be settled with.
     expect(confirmed.settle).toContain('已切换');
+  });
+
+  it('names a session straight from /rename, and through the card when no name is typed', async () => {
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    const ctx = commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    });
+
+    // With a name, it is set outright — one message, no card to press.
+    await f.controller.handleRenameCommand('0905-1 登录接口重构', ctx);
+    expect(f.bridge.renameSession).toHaveBeenCalledWith('s1', '登录接口重构');
+    expect(f.sendMarkdown).toHaveBeenCalledWith('chat-a', expect.stringContaining('登录接口重构'), undefined);
+
+    // Without one, the card carries the alias so only the name has to be typed.
+    await f.controller.handleRenameCommand('0905-1', ctx);
+    const card = JSON.stringify(f.sendCard.mock.calls.at(-1)?.[1]);
+    expect(card).toContain('"cmd":"session-rename"');
+    expect(card).toContain('"tag":"input"');
+    expect(card).toContain('0905-1');
+    const nonce = [...card.matchAll(/"nonce":"([^"]+)"/gu)][0]?.[1];
+
+    const named = await f.controller.handleAction({
+      value: { cmd: 'session-rename', action: 'rename-submit', alias: '0905-1', nonce, scope: 'chat-a', workspaceCwd: '/repo', actorId: 'user-a' },
+      operatorId: 'user-a', chatId: 'chat-a', threadId: undefined, currentScope: 'chat-a',
+      formValue: { title: '  发布流程  ' },
+    });
+    expect(f.bridge.renameSession).toHaveBeenLastCalledWith('s1', '发布流程');
+    expect(named.settle).toContain('发布流程');
+  });
+
+  it('treats an empty name submit as keeping dsh own naming', async () => {
+    // The card has to accept "no opinion": an empty submit is a real answer,
+    // not a validation error to bounce back.
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    await f.controller.handleRenameCommand('0905-1', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+    const nonce = [...JSON.stringify(f.sendCard.mock.calls.at(-1)?.[1]).matchAll(/"nonce":"([^"]+)"/gu)][0]?.[1];
+
+    const outcome = await f.controller.handleAction({
+      value: { cmd: 'session-rename', action: 'rename-submit', alias: '0905-1', nonce, scope: 'chat-a', workspaceCwd: '/repo', actorId: 'user-a' },
+      operatorId: 'user-a', chatId: 'chat-a', threadId: undefined, currentScope: 'chat-a',
+      formValue: { title: '   ' },
+    });
+
+    expect(f.bridge.renameSession).not.toHaveBeenCalled();
+    expect(outcome.toast.type).toBe('info');
+    expect(outcome.settle).toContain('默认命名');
+  });
+
+  it('refuses a naming card replayed by someone else', async () => {
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    await f.controller.handleRenameCommand('0905-1', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+    const nonce = [...JSON.stringify(f.sendCard.mock.calls.at(-1)?.[1]).matchAll(/"nonce":"([^"]+)"/gu)][0]?.[1];
+
+    const stolen = await f.controller.handleAction({
+      value: { cmd: 'session-rename', action: 'rename-submit', alias: '0905-1', nonce, scope: 'chat-a', workspaceCwd: '/repo', actorId: 'user-a' },
+      operatorId: 'user-b', chatId: 'chat-a', threadId: undefined, currentScope: 'chat-a',
+      formValue: { title: 'not mine' },
+    });
+
+    expect(stolen.toast.type).toBe('error');
+    expect(f.bridge.renameSession).not.toHaveBeenCalled();
   });
 
   it('requires profile admin for group/topic but permits the owner of a member scope', async () => {

@@ -78,6 +78,12 @@ export interface SessionProjectionSource {
   createSession?(cwd: string): Promise<string>;
   deleteSession?(sessionId: string): Promise<SessionTrashResult>;
   purgeSession?(sessionId: string): Promise<SessionPurgeResult>;
+  /**
+   * Set a session's user-chosen name, when the transport can reach dsh's title
+   * service. Optional: a source without it makes /rename unavailable rather
+   * than failing at the call site.
+   */
+  renameSession?(sessionId: string, title: string): Promise<string>;
 }
 
 export interface WebProjectionTransport {

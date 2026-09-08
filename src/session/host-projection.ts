@@ -154,10 +154,7 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
   }
 
   async prompt(sessionId: string, text: string, rpcId: string = randomUUID()): Promise<{ rpcId: string }> {
-    const agent = await this.services.agentFor(sessionId, {
-      ...(this.endpoints.provider === undefined ? {} : { provider: this.endpoints.provider }),
-      ...(this.endpoints.model === undefined ? {} : { model: this.endpoints.model }),
-    });
+    const agent = await this.services.agentFor(sessionId, this.route());
     if (!agent) throw new Error(`session ${sessionId} could not be resumed`);
     agent.followup(await this.services.userMessage(text));
     return { rpcId };
@@ -182,12 +179,26 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
     const agent = await this.services.createAgent(
       await this.services.sessionId(`session-${randomUUID()}`),
       cwd,
-      {
-        ...(this.endpoints.provider === undefined ? {} : { provider: this.endpoints.provider }),
-        ...(this.endpoints.model === undefined ? {} : { model: this.endpoints.model }),
-      },
+      this.route(),
     );
     return agent.id;
+  }
+
+  /**
+   * Name a session through dsh's own title service, so the Web UI shows the
+   * name set from Feishu without any syncing of ours: the title is a durable
+   * event in the session log, and every surface reads it from there.
+   */
+  async renameSession(sessionId: string, title: string): Promise<string> {
+    return this.services.renameSession(sessionId, title, this.route());
+  }
+
+  /** Provider/model to resume with, shared by every call that needs an agent. */
+  private route(): { provider?: string; model?: string } {
+    return {
+      ...(this.endpoints.provider === undefined ? {} : { provider: this.endpoints.provider }),
+      ...(this.endpoints.model === undefined ? {} : { model: this.endpoints.model }),
+    };
   }
 
   async deleteSession(sessionId: string): Promise<SessionTrashResult> {

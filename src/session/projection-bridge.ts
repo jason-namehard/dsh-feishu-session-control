@@ -134,6 +134,22 @@ export class SessionProjectionBridge {
     return this.deps.source.purgeSession(sessionId);
   }
 
+  /**
+   * Name a session, through whichever transport this bridge was built on.
+   *
+   * dsh's title service is the single writer for the name, so this is also
+   * what makes a Feishu rename appear in the Web UI — there is no second copy
+   * of the name to keep in step.
+   */
+  async renameSession(sessionId: string, title: string): Promise<string> {
+    const trimmed = title.trim();
+    if (trimmed === '') throw new Error('a session name cannot be empty');
+    if (!this.deps.source.renameSession) {
+      throw new Error('renaming sessions is unavailable for this adapter');
+    }
+    return this.deps.source.renameSession(sessionId, trimmed);
+  }
+
   async prepare(
     sessionId: string,
     workspaceCwd: string,

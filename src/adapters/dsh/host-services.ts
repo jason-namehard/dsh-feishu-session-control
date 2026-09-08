@@ -82,6 +82,18 @@ interface HostSessionQuery {
   readTitleSnapshot?(id: HostSessionId): Promise<{ title?: string } | undefined>;
 }
 
+/**
+ * dsh's own title service (`@deepseek-ai/dsh-session-title`), the single
+ * writer for a session's user-chosen name. `rename` appends a durable title
+ * event to the session log, which is what every other surface reads — so a
+ * name set from Feishu shows up in the Web UI without any syncing of our own.
+ * It takes the session object, not its id, exactly as dsh's own session
+ * controller calls it.
+ */
+interface HostSessionTitles {
+  rename(session: HostSession, title: string): { title: string; eventSeq?: number };
+}
+
 interface HostAgentPresets {
   resolve(id?: string): Promise<{ id: string }>;
   mount(agentCtx: unknown, id?: string): Promise<unknown>;
@@ -404,6 +416,35 @@ export class HostServices {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Set a session's user-chosen name through dsh's title service.
+   *
+   * Resuming the agent first is not incidental: `rename` writes into the live
+   * session, so the session has to be loaded for the title event to land in
+   * its log. That is also how dsh's own `session/rename` endpoint does it.
+   *
+   * @param sessionId - the session to name.
+   * @param title - the proposed name; the service normalises and may trim it.
+   * @param route - provider/model for the resume, as elsewhere.
+   * @returns the name the service actually accepted.
+   */
+  async renameSession(
+    sessionId: HostSessionId,
+    title: string,
+    route: HostAgentOptions = {},
+  ): Promise<string> {
+    const titles = service(this.ctx, 'sessionTitle') as HostSessionTitles | undefined;
+    if (!titles || !isFn(titles.rename)) {
+      throw new Error('this dsh deployment mounts no session-title service');
+    }
+    const agent = await this.agentFor(sessionId, route);
+    if (!agent) throw new Error(`session ${String(sessionId)} could not be resumed`);
+    const accepted = titles.rename(agent.session, title);
+    return typeof accepted?.title === 'string' && accepted.title.trim() !== ''
+      ? accepted.title.trim()
+      : title;
   }
 
   /**

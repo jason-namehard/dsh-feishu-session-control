@@ -107,3 +107,90 @@ export function renderSessionOutcomeCard(input: { zh: string; en: string }): obj
     enUs: { summary: 'Session action result', body: { elements: [{ tag: 'markdown', content: input.en }] } },
   });
 }
+
+/**
+ * Ask for a session's name in a text field on the card.
+ *
+ * The alternative is telling someone to retype `/rename 0908-1 <name>`, which
+ * on a phone means reading an alias off one message and typing it into
+ * another. Here the alias is already bound to the card, so only the name has
+ * to be typed — and submitting it empty is a valid answer, meaning "leave
+ * dsh's own naming alone".
+ *
+ * The input and its submit button sit inside a `form`: card JSON 2.0 only
+ * returns a field's value in the callback when a submit-bound button collects
+ * it from the same form.
+ */
+export function renderSessionNameCard(input: {
+  alias: string;
+  sessionId: string;
+  currentTitle?: string;
+  nonce: string;
+  scope: string;
+  workspaceCwd: string;
+  actorId: string;
+  /** A session just created by /new, as opposed to renaming an existing one. */
+  fresh?: boolean;
+}): object {
+  const body = (locale: CardLocale) => {
+    const zh = locale === 'zh_cn';
+    const current = input.currentTitle?.trim();
+    return {
+      elements: [
+        {
+          tag: 'markdown',
+          content: [
+            `**${zh
+              ? (input.fresh ? '给新会话起个名字' : '重命名会话')
+              : (input.fresh ? 'Name the new session' : 'Rename session')}**`,
+            '',
+            `${zh ? '别名' : 'Alias'}: **\`${safe(input.alias, 128)}\`**`,
+            ...(current
+              ? [`${zh ? '当前名称' : 'Current name'}: ${safe(current, 256)}`]
+              : []),
+            '',
+            zh
+              ? '名称会写入 DSH，网页端会话列表同步显示。留空提交则保留 DSH 的默认命名。'
+              : 'The name is written to DSH and appears in the Web session list. Submit it empty to keep dsh’s own naming.',
+          ].join('\n'),
+        },
+        {
+          tag: 'form',
+          name: `form-rename-${input.nonce}`,
+          elements: [
+            {
+              tag: 'input',
+              name: 'title',
+              max_length: 120,
+              default_value: current ?? '',
+              placeholder: {
+                tag: 'plain_text',
+                content: zh ? '例如：登录接口重构' : 'e.g. Refactor the login endpoint',
+              },
+            },
+            {
+              tag: 'button',
+              type: 'primary',
+              text: { tag: 'plain_text', content: zh ? '保存名称' : 'Save name' },
+              form_action_type: 'submit',
+              name: `btn-rename-${input.nonce}`,
+              value: {
+                cmd: 'session-rename',
+                action: 'rename-submit',
+                alias: input.alias,
+                nonce: input.nonce,
+                scope: input.scope,
+                workspaceCwd: input.workspaceCwd,
+                actorId: input.actorId,
+              },
+            },
+          ],
+        },
+      ],
+    };
+  };
+  return localizedCard({
+    zhCn: { summary: '会话命名', body: body('zh_cn') },
+    enUs: { summary: 'Session name', body: body('en_us') },
+  });
+}
