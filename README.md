@@ -14,6 +14,18 @@
   <img src="https://img.shields.io/badge/status-released-blue" alt="Status">
 </p>
 
+> **来源声明**：本项目是 [`PlutoKeating/dsh-lark-bot`](https://github.com/PlutoKeating/dsh-lark-bot)（AGPL-3.0）的 **fork**，
+> 飞书长连接、命令路由、审批与工作区骨架来自上游，其著作权与 AGPL-3.0 义务继续适用。
+>
+> 本仓库在其上新增（由 **见川** 维护）：
+> - **进程内直连 DSH 主机**，取代原先的回环 HTTP 传输 —— 一并消除了浏览器认证、RPC 改名和事件 mux 端点这三层兼容面
+> - **DSH 0.1.2-rc.1 破坏性变更适配**（见 `docs/UPGRADE.md`）
+> - **`MMDD-N` 别名会话生命周期**：`/sessions` `/use` `/rename` `/delete` `/purge`，跨工作空间，回收站后再永久删除
+> - **按群 @ 策略** `/mention`，在「全群不用 @」的默认之上支持逐群例外
+> - 将 `dsh-sessions-manager`（MIT）**并入本包**，使用者不必再额外安装多个会话插件
+>
+> 完整来源与许可说明见 [`NOTICE.md`](NOTICE.md) 与 [`docs/PROJECT_IDENTITY.md`](docs/PROJECT_IDENTITY.md)。
+
 ## 项目简介
 
 本项目正式名称为 **DSH飞书Session控制**；npm/DSH 兼容包名暂保留为 `dsh-lark-bot`，以避免破坏现有 profile。

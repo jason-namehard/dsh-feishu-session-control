@@ -14,6 +14,21 @@
   <img src="https://img.shields.io/badge/status-released-blue" alt="Status">
 </p>
 
+> **Provenance**: this project is a **fork** of [`PlutoKeating/dsh-lark-bot`](https://github.com/PlutoKeating/dsh-lark-bot)
+> (AGPL-3.0). The Feishu long connection, command routing, approval flow and workspace scaffolding come from
+> upstream; its copyright and AGPL-3.0 obligations continue to apply.
+>
+> Added here, maintained by **见川**:
+> - **In-process transport to the dsh host**, replacing loopback HTTP — which also removes browser authentication,
+>   RPC renaming and the event-mux endpoint from the compatibility surface entirely
+> - **Compatibility with dsh 0.1.2-rc.1's breaking changes** (see `docs/UPGRADE.md`)
+> - **`MMDD-N` alias session lifecycle**: `/sessions` `/use` `/rename` `/delete` `/purge`, across workspaces,
+>   recycle bin before permanent deletion
+> - **Per-chat @-mention policy** `/mention`, layering per-group exceptions over the profile-wide default
+> - **`dsh-sessions-manager` (MIT) integrated into this package**, so no extra session plugins need installing
+>
+> Full provenance and licensing: [`NOTICE.md`](NOTICE.md) and [`docs/PROJECT_IDENTITY.md`](docs/PROJECT_IDENTITY.md).
+
 ## Project Overview
 
 The project name is **DSH Feishu Session Control**. The npm/DSH compatibility package name remains `dsh-lark-bot` so existing profiles keep working.

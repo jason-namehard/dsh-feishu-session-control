@@ -34,6 +34,13 @@ coverage/
 .dsh/
 .state/
 .sessions/
+# 这套部署实际使用的目录/文件名。它们平时在仓库外（E:\DeepSeekHarness、
+# ~/.dsh-lark），但只要有人把 DSH_HOME 指到仓库里、或顺手拷一份凭据进来，
+# 就会被提交进公开仓库——补在这里当兜底，代价只有三行。
+dsh-home/
+.dsh-lark/
+.credentials.yaml
+*.credentials.yaml
 .session_aliases.json
 :memory:
 *.sqlite
