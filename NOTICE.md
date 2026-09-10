@@ -5,6 +5,9 @@
 DSH飞书Session控制 is maintained by **见川**. This repository is a new integration and refactoring project;
 it is not the upstream `PlutoKeating/dsh-lark-bot` repository and does not represent its author.
 
+Changes to the upstream code base were made starting 2026-08, and continue; the current state is described in
+`docs/PROJECT_IDENTITY.md`.
+
 ## Upstream and third-party sources
 
 The project is based on and interoperates with the following open-source projects:
