@@ -1,46 +1,44 @@
 ---
 title: 排障与 FAQ
-description: 诊断命令、常用问题与快速定位。
+description: Session 连接、飞书事件、审批和本地部署的常见问题。
 ---
 
 # 排障与 FAQ
 
-诊断命令、常用问题与快速定位。
+## `/sessions` 找不到当前聊天
 
-## 诊断与状态
+确认该飞书聊天已经发送过普通消息或成功执行 `/use <alias>`。首次普通消息会创建并连接 session；Web 创建的
+session 默认不属于任何飞书聊天。
 
-- `/status` — 可刷新状态卡，查看工作区、模型、run、token 用量、任务账本与「出站渠道」。
-- `/doctor`（管理员）— 生成脱敏诊断包并作为文件发送，内容排除消息正文 / transcript / 凭据。
-- `dsh-lark-bot doctor` / `service status` / `guardian status` — 终端侧区分「引擎进程活着」与「飞书通道可用」。
+## 群里不 `@` 没反应
 
-## 常见问题
+1. 确认已申请**应用身份权限** `im:message.group_msg`；
+2. 在飞书开发者后台发布包含该权限的新版本；
+3. 发送 `/mention off`；
+4. 确认 `DSH_LARK_GROUP_POLL_MS=0` 时事件流确实已生效。
 
-### DeepSeek Harness 怎么接入飞书？
+## `pwsh` 仍要求批准
 
-见 [快速开始](/guide/quickstart)：一条命令安装 + 扫码绑定，全程不需要公网服务器、域名或内网穿透。
+先检查 DSH 原生日志是否存在对应 `approval/request`。存在表示 DSH 自身要求审批，插件只负责同步；Web 或
+飞书任一端批准即可。不存在原生请求却收到飞书卡，才是插件额外审批问题。
 
-### 需要公网 IP 或服务器吗？
+## Web 消息为什么没有发到飞书
 
-不需要。飞书通道使用 WebSocket 长连接（出站），NAT 后面也能用，代码始终只在本机运行，飞书只传输消息。
+这是默认设计。Web session 默认不连接飞书；已连接 session 在半衔接下也不会抄送 Web/TUI 独立回合。使用
+`/switch` 切到完整衔接后，才会抄送该 session 后续的电脑端新回合。
 
-### dsh 崩溃了怎么办？
+## 关闭 DSH 后飞书为什么离线
 
-默认安装的安全网守护会接管飞书通道，发 `/safemode` 进入仅核心安全模式自愈，`/safemode exit` 恢复完整 profile。任务账本会在出站通道就绪后安全标为 `interrupted`，用 `/jobs` 对账并显式重试。
+这是预期行为。本项目已完全移除 Guardian，不接管、启动或重启已关闭的 DSH。
 
-### 收不到转发到 Telegram / 企业微信的通知？
+## 更新后仍运行旧代码
 
-先 `/channels list` 确认渠道已 `enable`；再用 `/notifications show` 确认 scope 的 `sinks=` 与渠道 id 一致。渠道发送失败只记结构化日志，不阻塞其他渠道。详见 [通知转发到其他 IM](/guide/notification-sinks)。
+重新执行本地 `file:` 插件安装，观察 `dsh-hot-installer` 日志。若热挂载失败或明确要求重启，再从系统托盘
+选择“重启 DSH”。
 
-### 怎么确认下载的是可信版本？
+## 诊断入口
 
-GitHub 地址确认并发布后，只从本项目仓库与 npm（`dsh-lark-bot` / `dsh-feishu-bot`）获取；凡提供 exe 的渠道均不可信。
-
-### 为什么说功能最全？
-
-十二项组合为一：安全网守护、多角色、多机器人可信交接、并行任务、崩溃任务对账、会话归档、跨会话通知、通知转发到其他 IM、dsh Web 可视化设置、对话内模型 / 密钥管理、执行模式、计划门禁与飞书内自更新。
-
-## 更多资料
-
-- 完整文档：仓库 `docs/`（README / MANUAL / FEATURES / API / ARCHITECTURE）。
-- 用户手册：`docs/MANUAL.md`。
-- 架构决策：`docs/ARCHITECTURE.md`（含关键决策 18：出站通知渠道）。
+- 飞书 `/status`：查看当前 scope、session 和衔接模式；
+- 飞书 `/doctor`：生成脱敏诊断信息；
+- DSH 主日志：确认 session、工具调用与 `approval/request`；
+- `git status --short`、`pnpm typecheck`、定向 Vitest 与 `pnpm build`：验证源码工作区。

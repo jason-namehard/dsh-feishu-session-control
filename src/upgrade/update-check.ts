@@ -5,7 +5,10 @@ import { compareVersions, fetchNpmLatestVersionOnce } from './versions.js';
  * Cheap, cached npm-latest lookup shared by the `/version` command and the
  * bridge update notifier (issue #15). The result is cached in memory so a
  * user-triggered `/version` and the periodic notifier never hammer the
- * registry. `DSH_LARK_UPGRADE_CHECK=0` disables probing entirely.
+ * registry. This fork keeps probing disabled by default because its
+ * compatibility package name is still the upstream npm name; blindly
+ * resolving `latest` could replace the fork with an upstream release.
+ * `DSH_LARK_UPGRADE_CHECK=1` explicitly enables probing.
  */
 
 export const UPDATE_CHECK_CACHE_MS = 60 * 60_000;
@@ -31,7 +34,8 @@ interface UpdateCheckCache {
 let cache: UpdateCheckCache | undefined;
 
 export function upgradeCheckEnabled(): boolean {
-  return (process.env.DSH_LARK_UPGRADE_CHECK ?? '1') !== '0';
+  const value = process.env.DSH_LARK_UPGRADE_CHECK?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
 }
 
 /**

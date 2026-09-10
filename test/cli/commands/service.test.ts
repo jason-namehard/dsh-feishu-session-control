@@ -19,22 +19,18 @@ afterEach(() => {
 });
 
 describe('service CLI', () => {
-  it('prints lifecycle status with the bridge heartbeat age', async () => {
+  it('prints lifecycle status', async () => {
     const output = vi.fn();
     const manager = { status: vi.fn().mockResolvedValue(RUNNING) } as unknown as ServiceManager;
-    await runServiceCommand('status', {}, {
-      manager,
-      output,
-      heartbeatAge: async () => 1_250,
-    });
-    expect(output).toHaveBeenCalledWith(expect.stringContaining('heartbeat: 1250ms'));
+    await runServiceCommand('status', {}, { manager, output });
+    expect(output).toHaveBeenCalledWith(expect.stringContaining('state:     running'));
     expect(process.exitCode).toBeUndefined();
   });
 
   it('delegates stop and reports failures without throwing', async () => {
     const output = vi.fn();
     const manager = { stop: vi.fn().mockRejectedValue(new Error('stop failed')) } as unknown as ServiceManager;
-    await runServiceCommand('stop', {}, { manager, output, heartbeatAge: async () => undefined });
+    await runServiceCommand('stop', {}, { manager, output });
     expect(output).toHaveBeenCalledWith('stop failed\n');
     expect(process.exitCode).toBe(1);
   });
@@ -53,7 +49,7 @@ describe('service CLI', () => {
 
 describe('formatServiceStatus', () => {
   it('renders platform, pid and restart counters', () => {
-    const text = formatServiceStatus(RUNNING, undefined);
+    const text = formatServiceStatus(RUNNING);
     expect(text).toContain('platform:  linux-systemd');
     expect(text).toContain('pid:       42');
     expect(text).toContain('restarts:  1');

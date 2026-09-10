@@ -4,6 +4,7 @@ import {
   optionalString,
   optionalStringArray,
   requiredString,
+  type RawToolExecution,
   type ToolPluginContext,
 } from './raw-tool.js';
 
@@ -73,7 +74,7 @@ export function apply(ctx: Context, config: Config = {}) {
           ];
         },
       },
-      async execute(rawArgs) {
+      async execute(rawArgs, exec: RawToolExecution | undefined) {
         const args = objectArgs(rawArgs, 'lark_notify');
         const text = requiredString(args, 'text', 'lark_notify');
         const scope = optionalString(args, 'scope', 'lark_notify');
@@ -87,8 +88,13 @@ export function apply(ctx: Context, config: Config = {}) {
         if (!endpoint || !token) {
           throw new Error('lark_notify is not configured (endpoint/token missing)');
         }
+        const sessionId = exec?.agent?.session === undefined
+          ? undefined
+          : String(exec.agent.session.id);
+        if (!sessionId) throw new Error('lark_notify needs an active session');
         const payload: Record<string, unknown> = {
           token,
+          sessionId,
           text,
         };
         if (scope) payload.scope = scope;

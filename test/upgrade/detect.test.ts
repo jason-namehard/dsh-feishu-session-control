@@ -6,7 +6,6 @@ import {
   detectUpgradeState,
   readInstalledPackage,
 } from '../../src/upgrade/detect.js';
-import { guardianServiceFilePath } from '../../src/guardian/install.js';
 
 const tempDirs: string[] = [];
 
@@ -38,7 +37,7 @@ describe('readInstalledPackage', () => {
 });
 
 describe('detectUpgradeState', () => {
-  it('reports the installed version, no running processes and no guardian', async () => {
+  it('reports the installed version and no running profile process', async () => {
     const home = await makeHome();
     const manifest = join(home, 'profiles', 'dsh-lark', 'node_modules', 'dsh-lark-bot', 'package.json');
     await mkdir(join(manifest, '..'), { recursive: true });
@@ -46,43 +45,34 @@ describe('detectUpgradeState', () => {
 
     const state = await detectUpgradeState({
       dshHome: home,
-      larkHome: join(home, 'lark'),
-      guardianRoot: home,
       listProcessesFn: async () => [],
     });
 
     expect(state.installed?.version).toBe('0.10.2');
     expect(state.profileProcess).toBeUndefined();
-    expect(state.guardian.installed).toBe(false);
-    expect(state.guardian.running).toBe(false);
-    expect(state.heartbeatFresh).toBe(false);
+    expect(state.bridgeProfile).toBe('default');
   });
 
-  it('detects a running dsh profile process and a running guardian', async () => {
+  it('detects a running dsh profile process and ignores unrelated processes', async () => {
     const home = await makeHome();
     const state = await detectUpgradeState({
       dshHome: home,
-      larkHome: join(home, 'lark'),
-      guardianRoot: home,
       listProcessesFn: async () => [
         {
           pid: 1001,
           cmdline: 'node /home/x/@deepseek-ai/dsh/lib/bin.js --profile dsh-lark',
         },
-        { pid: 1002, cmdline: 'node /pkg/dist/cli.js guardian run' },
+        { pid: 1002, cmdline: 'node /pkg/dist/cli.js unrelated run' },
       ],
     });
 
     expect(state.profileProcess?.pid).toBe(1001);
-    expect(state.guardian.running).toBe(true);
   });
 
   it('never treats `dsh plugin` invocations as the profile being up', async () => {
     const home = await makeHome();
     const state = await detectUpgradeState({
       dshHome: home,
-      larkHome: join(home, 'lark'),
-      guardianRoot: home,
       listProcessesFn: async () => [
         {
           pid: 2001,
@@ -94,18 +84,13 @@ describe('detectUpgradeState', () => {
     expect(state.profileProcess).toBeUndefined();
   });
 
-  it('detects a pre-existing guardian service entry', async () => {
+  it('uses the explicit bridge profile for post-upgrade doctor checks', async () => {
     const home = await makeHome();
-    const serviceFile = guardianServiceFilePath(process.platform, home);
-    await mkdir(join(serviceFile, '..'), { recursive: true });
-    await writeFile(serviceFile, '# unit', 'utf8');
-
     const state = await detectUpgradeState({
       dshHome: home,
-      larkHome: join(home, 'lark'),
-      guardianRoot: home,
+      bridgeProfile: 'bridge-a',
       listProcessesFn: async () => [],
     });
-    expect(state.guardian.installed).toBe(true);
+    expect(state.bridgeProfile).toBe('bridge-a');
   });
 });

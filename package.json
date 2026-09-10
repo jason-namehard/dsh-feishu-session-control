@@ -1,7 +1,7 @@
 {
   "name": "dsh-lark-bot",
   "version": "0.19.17",
-  "description": "DSH飞书Session控制：把 DeepSeek Harness (dsh) 装进飞书/Lark，统一远程 session 控制、别名、回收站、永久清理、Web 管理和 Guardian。| DSH Feishu Session Control: a unified Feishu/Lark bridge for remote session control, aliases, recycle-bin lifecycle, Web management and the Guardian.",
+  "description": "DSH飞书Session控制：把 DeepSeek Harness (dsh) 接入飞书/Lark，统一远程 session 控制、稳定别名、回收站、永久清理、Web 管理和半/完整衔接。| DSH Feishu Session Control: a unified Feishu/Lark bridge for remote session control, stable aliases, recycle-bin lifecycle, Web management, and half/full connection modes.",
   "author": "见川",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
@@ -134,6 +134,7 @@
     "dev": "tsup --watch",
     "start": "node bin/dsh-lark-bot.mjs start",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsup",
+    "postbuild": "node scripts/sync-plugin-digest.mjs",
     "check:publish-bundle": "node scripts/check-publish-bundle.mjs",
     "check:tui-admission": "node scripts/check-tui-admission.mjs",
     "check:tui-tty": "node scripts/check-tui-tty.mjs",
@@ -181,7 +182,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.25.1",
+    "@agentclientprotocol/sdk": "1.4.0",
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh-attachment": "0.1.2-rc.1",
     "@deepseek-ai/dsh-sdk-client": "0.1.2-rc.1",
@@ -220,10 +221,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PlutoKeating/dsh-lark-bot.git"
+    "url": "git+https://github.com/jason-namehard/dsh-feishu-session-control.git"
   },
   "bugs": {
-    "url": "https://github.com/PlutoKeating/dsh-lark-bot/issues"
+    "url": "https://github.com/jason-namehard/dsh-feishu-session-control/issues"
   },
-  "homepage": "https://github.com/PlutoKeating/dsh-lark-bot#readme"
+  "homepage": "https://github.com/jason-namehard/dsh-feishu-session-control#readme"
 }

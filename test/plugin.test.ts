@@ -15,7 +15,12 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  })));
 });
 
 function makeCtx() {
@@ -216,7 +221,7 @@ describe('dsh-lark-bot bundle plugin', () => {
       await vi.waitFor(async () => {
         expect(await readFile(settingsFile, 'utf8')).toContain('inputModalities:');
       }, { timeout: 10_000 });
-      expect(adapter.run).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(adapter.run).toHaveBeenCalledOnce(), { timeout: 10_000 });
     } finally {
       await dispose();
     }

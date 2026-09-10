@@ -1,356 +1,181 @@
-# 快速开始 · Quick Start
+# 快速开始
 
-> 本文描述 dsh-lark-bot 面向最终用户的安装与首次使用流程。
+适用版本：DSH `0.1.2-rc.1`；最后核对日期：2026-09-09。
 
-## 1. 前置条件
+## 1. `dsh-home` 是什么
 
-- Node.js ≥ 22.19
-- 已安装 DeepSeek Harness（`dsh`）并配置 `DEEPSEEK_API_KEY`
-- 当前兼容基线为 dsh `0.1.0-rc.8`；托管 SDK / ACP runtime 会自动修复旧版本 profile
-- 一个飞书 / Lark 账号
+`DSH_HOME`（口头常称 `dsh-home`）是 DeepSeek Harness 的数据根目录，不是程序安装目录。它通常包含：
 
-## 2. 安装（唯一路径）
+- DSH profiles 及每个 profile 的 `package.json`、`pnpm-lock.yaml`；
+- 已安装插件和依赖；
+- DSH 设置、凭据引用、session 与运行状态；
+- Web profile 的组成方式。
+
+更换或删除 `DSH_HOME` 等于让 DSH 使用另一套“用户数据”。同一台电脑可以保留测试 home 和正式 home，
+只要启动时明确设置不同的 `DSH_HOME`；不能让两个实例同时占用同一飞书应用长连接或同一 Web 端口。
+
+## 2. 前置条件
+
+- Node.js 22 或更高版本；
+- 已安装 `@deepseek-ai/dsh`；
+- DSH 已配置模型和 API key；
+- 一个飞书/Lark 自建应用；
+- 飞书采用“长连接接收事件/回调”。
+
+确认 DSH 版本：
 
 ```bash
-npx dsh-lark-bot@latest setup --profile dsh-lark
+dsh --version
 ```
 
-> [!TIP]
-> `npx` 无需全局安装任何东西。若你已 `npm i -g dsh-lark-bot` 全局装过，`setup` 等价于
-> `dsh-lark-bot setup`。装好 dsh 并配好 `DEEPSEEK_API_KEY` 后，**安装 → 启动 → 扫码绑定 = 30 秒**。
+## 3. 安装
 
-`setup` 会：定位本机 dsh → 预批准 pnpm 构建策略（protobufjs 等；既有 profile 同时固定到其
-安装元数据记录的精确 pnpm 版本，避免 Corepack/store 主版本冲突）→ 将同一 bundle 安装到
-`dsh-lark` profile 和 `web` profile → **默认同时安装「安全网守护」**（见第
-6 节；不需要时加 `--no-guardian` 跳过）。正常使用时由 `web` profile 同时承载 DSH Web 和飞书桥接。
+当前 fork 尚未以独立 npm 包发布，应从本仓库源码安装：
 
-如只需要飞书桥接，可加 `--no-web`；也可用 `--web-profile <name>` 指定 Web profile 名称。
-
-开发阶段也可以先 `pnpm install && pnpm build`，再用
-`DSH_LARK_SETUP_PACKAGE=/path/to/dsh-lark-bot-x.y.z.tgz node dist/cli.js setup --profile dsh-lark`
-安装本地构建产物（可选，不面向普通用户）。
-
-**升级（v0.12.0+ 推荐）：** 一行命令彻底升级包 + guardian + 升级后验证：
-
-```bash
-npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes
+```powershell
+git clone https://github.com/jason-namehard/dsh-feishu-session-control.git
+Set-Location dsh-feishu-session-control
+corepack enable
+pnpm install
+pnpm build
+$packagePath = 'file:' + ((Resolve-Path .).Path -replace '\\', '/')
+node bin/dsh-lark-bot.mjs setup --profile dsh-lark --package $packagePath
 ```
 
-`--check` 只报告版本与运行状态；`--restart` 升级后自动重启 guardian 与受管 profile；
-`--rollback` 回滚到上次升级前版本；详见 README「升级」与 docs/MANUAL.md §1.1。
+`setup` 默认把同一个本地包装入桥接 profile 和 `web` profile。整合包已经包含 Web session 管理面板，
+不再额外安装 `dsh-sessions-manager`、`dsh-plugin-session-delete` 或 Guardian。
 
-不接触命令行时，profile 管理员可直接在飞书发送 `/upgrade`：发现新版本后点击 owner-bound
-确认卡，由 Guardian 独立 worker 更新卡片中确认的精确 npm 版本、修复 runtime profiles、重启并
-验证，再回到原 chat/thread 报告结果。worker 使用 0700 中立工作目录和按请求隔离的 npm cache，
-不继承 bridge cwd 或用户全局 cache；重载后只在通道、callback server 与 Guardian 心跳均就绪时
-报告成功，且自动强制刷新 runtime profile 与被链接主插件依赖树中不符合锁定版本的物理包。
-runtime 链接始终指向 dsh profile 内重新校验过的目标版本，不会指向 Guardian 的临时 npx cache；
-npm/npx 扁平依赖布局也可正常识别。Guardian unit 同时会过滤 update worker 的 `_npx`、npm cache
-与 `node_modules/.bin` PATH，仅保留稳定的 Node、用户和系统工具目录。
-失败回执只显示脱敏的
-可行动原因。取消不做任何变更。每次 `/new` / `/reset` 也会 best-effort
-检查一次 npm，只有存在更新时才额外发送一条简短普通文本提醒。
+不要运行 `npx dsh-lark-bot@latest`：这个 npm 名称目前仍属于上游项目，不会安装本 fork。
 
-## 3. 启动并扫码（首次一次性绑定）
+## 4. 飞书应用配置
 
-```bash
-dsh web
+最小配置需要机器人收发消息、卡片交互和长连接事件。推荐额外开启：
+
+| 应用身份权限 | 用途 |
+| --- | --- |
+| `im:message.group_msg` | 接收群内不 `@` 机器人的消息 |
+| `im:message.reactions:write_only` | 用表情表示“已收到，正在处理” |
+
+权限应选择**应用身份权限**，因为桥接以自建应用/机器人身份连接，不是以某个用户授权身份运行。新增敏感
+权限后需发布应用版本并等待生效。
+
+已有应用可用环境变量绑定：
+
+```text
+DSH_LARK_APP_ID=cli_xxx
+DSH_LARK_APP_SECRET=...
+DSH_LARK_TENANT=feishu
 ```
 
-dsh 以标准插件方式加载 Web 与桥接插件；首次启动（无凭据时）终端显示二维码：
+未配置时，首次启动会打印二维码完成一次性绑定。
 
-1. 终端显示二维码。
-2. 使用飞书 App 扫码。
-3. 选择或创建 PersonalAgent 应用。
-4. 绑定成功后，桥接引擎在 dsh 进程内运行并发送欢迎卡片到私聊。
-5. 直接发送消息即可开始使用；群聊默认需要 `@bot`。
+## 5. 启动
 
-如需让 bot 接收群内未 @ 它的消息，先在目标群 `@bot` 一次以登记群聊，确认发送人已在
-`allowed_users`（扫码操作者默认加入，也可用 `/invite user <open_id>`），为应用授予
-`im:message.group_msg`，再以以下环境变量启动：
+启动承载 Web UI 和飞书插件的 profile：
 
 ```bash
-DSH_LARK_GROUP_NO_AT=true DSH_LARK_GROUP_POLL_MS=3000 dsh web
+dsh --profile web
 ```
 
-这是显式 opt-in：bridge 会处理白名单成员的实时无 @ 消息，并只轮询已登记群聊；历史路径仅处理
-启动后的白名单真人消息，不回放历史积压；实时与轮询都再次校验当前用户/群白名单，
-请在开启前确认群成员知情并符合组织的数据与隐私政策。开启后可运行 `dsh-lark-bot doctor`
-验证历史消息权限。
+Windows 本机可用托盘脚本作为唯一入口：
 
-在 Git 仓库中工作时，bot 会为每个会话自动创建独立 git worktree；非 Git 目录则直接使用你指定的目录。
-
-桥接始终由 dsh profile 内插件运行。需要退出终端后常驻 / 登录自启时，可选执行：
-
-```bash
-dsh-lark-bot service install --profile dsh-lark
-dsh-lark-bot service status --profile dsh-lark
-dsh-lark-bot service logs --profile dsh-lark -f
+```text
+E:\DeepSeekHarness\启动DSH.bat
 ```
 
-`start|stop|restart|uninstall` 管理完整生命周期；这只是 OS 托管同一 profile，不是第二套引擎。
-机器睡眠/断网时不能收消息，恢复连接后会向最近活跃会话提示。默认安全网守护见第 6 节。
+该脚本隐藏控制台、启动 DSH、打开带认证 token 的 Web 地址，并在通知区域显示图标。托盘提供打开、重启
+和退出。退出 DSH 时飞书连接同步断开；不存在离线接管。
 
-要在同一群加入多个独立机器人，可为每个 PersonalAgent 创建一个实例：
+不要再单独启动旧桥接服务或另一个相同飞书应用实例，否则会出现两条 WebSocket 争抢同一事件流。
 
-```bash
-dsh-lark-bot bot add reviewer --model gateway/review-model
-dsh-lark-bot bot list
-dsh-lark-bot bot status reviewer
+## 6. 首次验证
+
+1. 在 Web 创建一个 session，发消息；飞书不应收到任何内容。
+2. 在一个飞书私聊或群聊发送普通消息；DSH Web 应出现一个新 session，飞书收到最终结果。
+3. 发送 `/sessions`；列表应显示当前对话标记。
+4. 发送 `/switch`；切到完整衔接后，从 Web 发起一轮，飞书应收到抄送。
+5. 再切回半衔接，从 Web 发起一轮，飞书不应收到抄送。
+6. 发送 `/detach`；下一条普通消息应创建新的独立 session。
+
+## 7. 群聊策略
+
+普通群聊默认一群一套共享 session。只有新消息事件进入模型，不会在每轮重新注入群历史。
+
+```text
+/mention off       # 本群不用 @，每条新消息都响应
+/mention on        # 本群必须 @ 才响应
+/mention default   # 删除本群例外，回到全局默认
 ```
 
-`bot add` 会自动使用 `dsh-lark-<name>` 与 `~/.dsh-lark/bots/<name>/dsh` 创建独立 profile、
-provider/凭据目录和用户服务；未显式提供 App ID/Secret 时一定扫码绑定，不继承主 bot App 凭据。
-把这些 bot 加入同一群后，可信实例可通过真实 @ 交接；连续 bot 回合默认最多 6 次，任意真人消息
-会重置。`bot remove reviewer` 删除服务、实例登记、配置凭据与服务环境快照，但保留该 profile 的
-session/worktree/archive 数据。额外实例不受默认 guardian 救援。
-已经有一个 PersonalAgent 应用时，
-可在启动命令的环境变量中提供凭据跳过扫码：
+管理员也可指定 chatId：
 
-```bash
-DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu \
-  dsh web
+```text
+/mention on oc_xxxxxxxxx
 ```
 
-## 4. 卸载
+若 `im:message.group_msg` 已生效，应设置 `DSH_LARK_GROUP_POLL_MS=0`，完全使用事件流。轮询不会直接把群
+历史放入模型上下文，但会产生不必要的飞书 API 调用和去重工作。
+
+## 8. Session 管理
+
+```text
+/sessions
+/new [名称]
+/use 0909-1
+/switch
+/detach
+/rename 0909-1 新名称
+/delete 0909-1
+/purge 0909-1
+```
+
+`/delete` 进入回收站；`/purge` 永久删除。两个命令都必须点击二次确认。别名不会因为删除而重新编号。
+完整说明见 [`SESSION_MANAGEMENT.md`](SESSION_MANAGEMENT.md)。
+
+## 9. 审批验证
+
+插件只镜像 DSH 原生审批。验证方式：
+
+1. 在一个已连接飞书的 session 触发 DSH 确实需要的危险操作；
+2. Web 和飞书应看到同一审批；
+3. 任一端批准后任务继续；
+4. 普通低风险工具不应被插件额外拦截。
+
+如果 `pwsh` 仍被询问，先在 DSH 原生日志中确认是否存在 `approval/request`。有该事件表示 DSH 本身要求
+审批；没有该事件却出现飞书卡，才属于插件问题。
+
+## 10. 从旧 Guardian 版本迁移
+
+当前版本不包含 Guardian。升级后应清理旧系统项：
+
+- Windows 启动目录中的 `dsh-lark-guardian.vbs`；
+- `~/.dsh-lark/guardian.json`；
+- `~/.dsh-lark/profiles/<profile>/guardian/`；
+- 旧的 guardian 后台进程或系统服务。
+
+清理不会删除 DSH session。完成后关闭 DSH，飞书必须同步离线且不会自动重启。
+
+## 11. 更新
+
+飞书管理员发送 `/upgrade` 前，应先确认已显式配置本 fork 的更新来源。源码方式最稳妥的更新流程是：
+
+```powershell
+git pull --ff-only
+pnpm install
+pnpm typecheck
+pnpm build
+$packagePath = 'file:' + ((Resolve-Path .).Path -replace '\\', '/')
+dsh plugin --profile web add $packagePath
+```
+
+更新后优先使用 DSH 插件热加载。若热加载失败，再从托盘显式“重启 DSH”。详见
+[`UPGRADE.md`](UPGRADE.md)。
+
+## 12. 卸载
 
 ```bash
+dsh plugin --profile web remove dsh-lark-bot
 dsh plugin --profile dsh-lark remove dsh-lark-bot
 ```
 
-## 5. 飞书内常用命令
-
-bot 自带卡片使用 Card JSON 2.0 原生 `zh_cn` / `en_us` variant，同一群里的飞书/Lark 用户会按各自
-客户端语言看到中文或英文。普通 Markdown/toast 降级并列显示中英文；agent 与用户原文不翻译。
-
-| 命令 | 作用 |
-| --- | --- |
-| `/new` `/reset` | 开始新会话 |
-| `/cd <path>` | 切换到该目录的独立会话（切回可继续） |
-| `/ws list` | 查看命名工作空间 |
-| `/ws save <name>` | 保存当前工作空间 |
-| `/ws use <name>` | 切换到命名工作空间 |
-| `/ws remove <name>` | 删除命名工作空间 |
-| `/status` | 查看可刷新状态卡（模型 / session / run / context / token / pending / 任务账本） |
-| `/version` | 查看当前版本与 npm 最新版本 |
-| `/upgrade` | 检查更新并通过确认卡让 Guardian 后台更新、验证和重载（管理员） |
-| `/doctor` | 生成并上传脱敏诊断 Markdown 文件（管理员） |
-| `/jobs [list\|show <消息ID>\|retry <消息ID>]` | 对账任务、查看 checkpoint、显式重试失败/中断任务 |
-| `/resume` | 查看当前会话最近上下文 |
-| `/stop` | 终止当前任务 |
-| `/timeout [N\|off\|default]` | 查看或设置当前会话运行超时 |
-| `/concurrency [N\|default]` | 查看或设置当前 scope 并行任务数 |
-| `/permission [ask\|allow\|deny] [scope]` | 查看或设置工具权限策略（管理员可指定当前聊天内 scope） |
-| `/isolation [group\|topic\|member]` | 查看或设置群聊会话隔离（设置仅管理员） |
-| `/role set <id>`、`/role list` | 绑定 / 查看多角色 Agent |
-| `/archive [note]`、`/archive send <id> [scope\|chatId]`、`/archive list` | 归档并上传 / 重发或由管理员转发 / 查看记录 |
-| `/notify <scope\|chatId> <text>` | 跨会话发送通知（管理员） |
-| `/notifications [show\|off\|default\|on …]` | 配置当前 scope 主动提醒，或恢复 Web 默认值 |
-| `/replies [show\|default\|set …]` | 配置回复合并、频率、批量上限与近似去重（profile 管理员或当前群管理员可修改） |
-| `/density [compact\|standard\|detailed]` | 查看或设置卡片密度 |
-| `/mode [quick\|balanced\|deep]`（兼容 `/effort`） | 选择当前会话任务强度；下一轮生效 |
-| `/model`、`/providers`、`/provider`、`/key` | 打开交互式管理卡片（模型直接点选/恢复默认；写操作走多轮向导） |
-| `/model use <provider/model>` `/model default <id>` | 精确路由并热切换当前会话模型（也兼容唯一模型 ID）/ 写入 dsh 默认模型 |
-| `/model add\|remove <provider> <modelId> [--input-modalities text,image]` | 管理 provider 模型及视觉输入能力（管理员） |
-| `/provider add\|update\|remove <id>` | 管理 provider（管理员） |
-| `/key set <引用名>`、`/key remove\|list <引用名>` | 用安全表单设置 / 删除 / 列出 dsh 凭据引用（写需管理员） |
-| `/secret status\|set\|remove <dsh-credential\|app-secret> <引用>` | 安全采集受支持密钥或仅查询配置状态 |
-| `/language show\|set plain\|agent …\|reset …` | 设置普通文本与 Agent 回答语言策略 |
-| `/ask <问题>` | 你主动发送结构化问答卡（回答写入会话上下文） |
-| `/invite user\|admin\|group <id>`、`/invite list`、`/invite remove user\|group <id>` | 管理访问白名单 |
-| `/help` | 查看 bridge 直接处理的当前版本权威命令清单 |
-
-过程卡正常结束但含失败工具时显示“已完成（含警告）”；这表示 Agent 已给出本轮结果，同时提醒并非
-所有工具步骤成功，不会把整个 job 改记为失败。
-
-模型 / provider / 凭据管理直接读写 dsh 官方配置（`~/.dsh/settings.yaml` 与
-`~/.dsh/.credentials.yaml`，与 dsh Web Settings→Models 同协议），改动下一请求生效：
-`/model use` 按会话热切换模型（桥接每轮解析 provider 路由并传给 dsh runtime，SDK 适配器
-路由变化时自动重建，下一轮真实生效）；`/model default` 写入 `{ provider, model }` 双字段的
-`agent-default-model`；`/provider add|update` 管理 `deepseek-official` 与自定义 pi-ai provider
-（Base URL 根域名自动补 `/v1`）；`/key set <引用名>` 打开仅请求者可提交的密码表单，bridge 直接写入
-0600 凭据文件。普通消息中的值（包括旧 `/key set <引用名> <值>` 与 `--api-key`）不会被读取或保存；
-密钥不进入 Agent prompt、session、任务账本、归档、日志、诊断包或回复。
-
-SDK / ACP 启动时若未显式设置 provider/model，会读取 dsh 对象形式的
-`agent-default-model: { provider, model }`；两处都没有完整 route 时 doctor/bridge 会直接给出配置错误。
-首次模型目录刷新失败时，对象形式默认 route 仍作为最小离线条目可用；其他未知模型不会因此被接受。
-受管 service 重启会保留旧 env 文件中当前 shell 未覆盖的 `DSH_LARK_*`，因此从新终端执行 restart
-不会再把已有 provider/model 静默清空。
-
-任务强度用 `/mode` 双语卡片或 `/mode quick|balanced|deep` 切换：快速适合简单问答，平衡适合大多数任务，深度适合复杂重构与需要更多验证的工作。模式按 scope 持久化并显示在 `/status`；切换仅影响下一轮，不会中断当前任务或清空上下文。`/effort` 是等价别名。
-
-启动后如发现异常，先运行 `dsh-lark-bot doctor` 检查 profile、工作目录和本机 dsh 可用性。
-无法使用终端时，管理员可在飞书私聊发送 `/doctor`，取得版本、非敏感配置摘要、当前运行状态和
-有限最近日志组成的脱敏文件；它不代替终端命令的 adapter 实际握手探测。
-
-### 不用环境变量：在 dsh Web 中设置
-
-打开本机 dsh Web 的 **Settings → Plugins → Plugin configuration → dsh-lark-bot**。这里可修改 App ID/Secret、默认项目文件夹、模型、每会话并行数、adapter 和默认提醒。Secret 只写不回显；连接类字段保存后自动重连，模型/并行数/提醒从下一任务或提醒热生效且不中断当前任务。页面底部可直接检查常见配置问题，也可复制 `/status`（Bot 没反应）或 `/doctor`（任务失败）到飞书会话深入诊断。远程浏览器为只读时，请回到运行 dsh 的本机 Web 操作。
-
-默认 backend 为当前 dsh Web 会话（`DSH_LARK_ADAPTER=web`）：桥接与 Web 运行在同一个前台 dsh
-进程中，关闭该窗口会同时关闭 Web 和飞书连接。需要独立 SDK runtime 时可显式设置
-`DSH_LARK_ADAPTER=sdk`；首次启动会自动在
-`~/.dsh/profiles/dsh-lark-sdk` 创建 SDK JSON-RPC runtime profile（bundle `dsh-base` +
-基于官方 server 的最小附件上传扩展），需要本机可用 `pnpm`；默认 SDK 已通过 rc.8 approval
-answerer 支持逐工具审批。扩展只把图片交给 dsh attachment store 入库，其他 SDK 方法仍由官方
-server 处理；core-only 安全模式继续使用未扩展的官方 server。
-也可切换 `DSH_LARK_ADAPTER=acp`（`~/.dsh/profiles/dsh-lark-acp`，改用 ACP
-`session/request_permission` 原生回调）；`headless` 保留旧版子进程 fallback；
-`DSH_LARK_ADAPTER=web` 驱动本地 dsh web agent（`session.prompt` + `/api/events.mux`，
-网页端成为唯一写者，从根上消除多写者会话损坏）。设置 `DSH_LARK_WEB_URL` 后，在飞书发送
-`/session`，从当前 canonical workspace 的无正文列表中选择并确认绑定；确认前不会披露历史，
-WebUI/TUI 的 open、resume 或 activity 也不会自动切换飞书 binding。可用
-`DSH_LARK_SESSION_BACKFILL_MESSAGES` / `DSH_LARK_SESSION_BACKFILL_BYTES` 限制历史回填，
-`DSH_LARK_SESSION_STREAM_UPDATE_MS` 控制 assistant 卡片更新间隔。
-
-SDK runtime 按 `scope + workspace` 隔离停止域，同一 scope 的并发 session 也使用独立 runtime；
-因此任务卡停止只停止该 run，`/stop` 只停止当前 scope，不会连带其他群。当前进程确认仍持有
-live runtime 时才原生续接 session；重启、停止或模型切换后自动新建 session 并回放 bridge
-transcript，避免 rc.8 persisted-log `id collision`。
-
-开发/准入验证还应在 build 后运行 `pnpm check:tui-admission`（唯一 v0.15 manifest、artifact SHA-256、
-lock closure 与 local/remote Host Descriptor）及 `pnpm check:tui-tty`（真实 PTY；Windows 需 ConPTY）。
-
-bot 会为每个飞书 scope 默认保存最近 40 条对话（`/retention` 可调），超出保留窗口的消息自动
-归档到 `~/.dsh-lark/profiles/<profile>/archives/`（Markdown + JSONL + Git commit，`/archive`
-可手动导出）；`/new` 只清空当前 `scope + workspace` 的会话记忆，其他工作区可切回续接。
-
-发送图片时，bot 会先下载到本地 media 目录，按内容识别 PNG/JPEG/WebP/GIF 并补全扩展名；默认
-SDK 经 dsh attachment store 校验后发送原生 image block，不发送路径文本，也不会改用工作区内
-其他图片。每轮运行前还会把选中的 `deepseek-official` 视觉模型幂等登记到
-`llm-deepseek.models` 并声明 `inputModalities: [text, image]`；这是 rc.8 runtime 实际执行图片请求所需，
-仅在 `/model` 卡片中显示视觉能力并不够。发送文本类文件时，会把文件内容注入给 dsh 处理。
-
-**任务中向你提问（问答卡）**：agent 需要你拍板、确认或补充缺失信息时，会通过 `lark_ask_user`
-工具主动向当前会话弹一张问答卡（单选 / 多选 / 自由文本）。可提交卡片，也可直接回复该卡片输入
-任意文字；单选/多选没有合适项时可直接补充说明。回答后任务自动继续；等待期间
-任务运行超时看门狗暂停，本地回调也会发送轻量心跳，不会在约 5 分钟时被 HTTP 空闲超时打断。
-
-**关键任务计划门禁**：SDK / ACP / Web agent 在较大或高风险动作前调用
-`lark_request_plan_approval`。完整计划先以普通 Markdown 消息发送，随后决策卡可“批准，开始执行”
-或填写意见后“继续规划”；未批准时 runtime 会拒绝写入、删除、移动、非只读 shell 命令与 `run_code`。
-每次批准仅放行随后一次高风险调用；计划外的后续调用必须重新确认。快速通道仅包含无路径的
-`date`、`id`、`pwd`、`uname`、`whoami` 和受限仓库内只读 Git 检查；`cat`、`grep`、`find`、
-`head`、`tail`、`rg`、`ls` 等文件读取/路径枚举命令按高风险处理。SDK 附带的命令说明、工作目录与
-false background 元数据不会改变只读判定，包含未知参数、串联、重定向、命令替换或未知程序的
-shell 调用仍按高风险处理。等待仅暂停
-该 session 的空闲超时，批准后原任务自动继续。停止任务会取消并撤回该 session 的卡。可信部署可用
-`DSH_LARK_PLAN_GATE=off` 关闭独立计划门禁，但不会关闭 scope policy 预检或逐工具审批；legacy headless 不支持工具回调。
-
-若工具被拒绝，插件会返回 `[policy-denial layer=...]`、明确原因和 `to change`；Harness 原生
-`[sandbox: ...]` 则属于 `file-sandbox`。`/permission allow` 只自动通过逐工具审批，不代表计划已获
-批准，也不会扩大 workspace 文件边界。`/permission deny` 在任何快速通道和计划门前生效；persona 的
-只读规则直接由执行分类器生成，并禁止拒绝后改用等价命令/工具/路径绕行。
-
-**逐操作审批**：默认 SDK 安装无需切换 adapter。计划获批后，dsh rc.8 对实际高风险工具调用会
-自动弹“允许执行一次 / 拒绝”卡；卡上显示工具、理由与可取得的参数，等待不计入 idle timeout。
-拒绝不会终止整个任务，而会交给 agent 改用安全方案。Web host 同样可用；ACP 使用原生 permission 通道。
-
-计划、审批和问答卡提交成功后会显示 toast、发送终态确认并撤回原卡；即使确认消息或撤回因网络
-原因失败，计划决策、审批结果或答案仍会正常交给 agent。失效卡会明确提示使用最新卡片，不会静默。
-若普通消息正常但所有卡片按钮完全无响应，请在飞书开放平台进入“事件与回调 → 回调配置”，启用
-卡片回调并重新发布应用；新版扫码向导会自动申请 `card.action.trigger`，旧版创建的应用需补做一次。
-
-## 6. DSH Web 会话管理整合
-
-本项目把 Web 会话管理、归档、回收站、恢复、永久清理、详情和跨工作区移动整合到同一个 `dsh-lark-bot` 包中。需要 Web 管理面板时，在 `web` profile 安装同一版本的包：
-
-```bash
-dsh plugin --profile web add dsh-lark-bot@<version>
-```
-
-Web profile 同时启用会话管理和唯一的飞书桥接，不要再并行启动 `dsh-lark` profile。飞书侧可使用 `/sessions` 列表、`/use <alias>`
-切换、`/delete <alias>` 移入回收站、`/purge <alias>` 永久清理；删除和永久清理均要求在确认卡上再次确认。
-完整生命周期说明见 [`docs/SESSION_MANAGEMENT.md`](SESSION_MANAGEMENT.md)。
-
-## 7. 安全网守护（默认安装）· Safety-net guardian
-
-dsh 采用「一切皆插件」架构，任何第三方插件都可能让整个 profile boot 失败。此时桥接引擎与
-dsh 一起下线，飞书入口不可用。因此 `setup` **默认安装**一个**独立于 dsh 进程**的最小守护，
-在最坏情况下仍保留飞书救援入口：
-
-```bash
-# 随 setup 默认安装（无需额外参数）；已安装后也可单独安装 / 重装：
-dsh-lark-bot guardian install --dsh-profile dsh-lark
-
-# 状态查看 / 卸载
-dsh-lark-bot guardian status
-dsh-lark-bot guardian uninstall
-```
-
-`guardian status` 的“守护进程 pid”只报告精确 `guardian run` 命令行唯一且存活的常驻进程，
-并在系统服务 PID 可用时交叉验证；连续查询同一运行实例会得到同一 PID。无法唯一证明身份时显示“未发现”，不会把
-本次状态查询进程误报为守护进程。
-
-不需要守护时，安装命令加 `--no-guardian` 跳过。
-
-dsh 正常运行时守护保持静默（不占用飞书通道）；dsh 下线或无法 boot 后，守护自动接管通道，
-在飞书里向 bot 发送控制信号即可全程自救，无需命令行：
-
-| 命令 | 作用 |
-| --- | --- |
-| `/safemode` | 进入仅核心安全模式（`dsh-base` + `dsh-headless`，无第三方插件），后续消息与 dsh 核心对话 |
-| `/safemode status` | 查看守护 / dsh / 安全模式状态 |
-| `/safemode plugins` | 列出故障 profile 已安装的插件清单 |
-| `/safemode stop` | 终止当前正在运行的安全模式任务（也可点击任务卡片 ⏹ 按钮） |
-| `/safemode exit` | 退出安全模式，重启完整 profile 并交还飞书通道 |
-
-安全模式下 agent 具备代码执行能力，可配合上述命令定位 / 修复 / 禁用损坏插件。安全模式优先使用
-官方 SDK 流式引擎（原生折叠面板实时展示思考 / 工具调用 / web search，最终回答单独发送）；
-SDK runtime 不可用（如缺 pnpm）时自动回退 headless——此时任务期间卡片仍实时显示
-“正在思考 / 已运行 Ns / 无响应 Ns”，任务结束、出错或超时都有明确终态。单任务**空闲超时**
-默认 10 分钟（`DSH_LARK_GUARDIAN_SAFE_TIMEOUT_MS`，任务持续无活动事件才被终止，活跃任务
-不会被误杀）。dsh 恢复后守护自动断开并回归静默。
-守护相关本地状态见下节。
-
-## 7. 本地状态
-
-- 配置文件：`~/.dsh-lark/config.json`
-- 守护状态：`~/.dsh-lark/guardian.json`
-- 会话状态与每 scope + workspace session 累计 token/context 快照：`~/.dsh-lark/profiles/<profile>/sessions.json`
-- 持久任务账本（原始消息/routing/workspace/状态/安全 checkpoint，0600）：`~/.dsh-lark/profiles/<profile>/jobs.json`
-- 会话归档：`~/.dsh-lark/profiles/<profile>/archives/`
-- 角色定义：`~/.dsh-lark/profiles/<profile>/roles.json`
-- scope 目录（chat/thread 与 topic reply anchor messageId）：`~/.dsh-lark/profiles/<profile>/scopes.json`
-- 群聊隔离策略：`~/.dsh-lark/profiles/<profile>/isolation.json`
-- 工具权限策略：`~/.dsh-lark/profiles/<profile>/permission-policies.json`（按隔离 scope 保存 `ask/allow/deny`，0600）
-- 通知偏好：`~/.dsh-lark/profiles/<profile>/notification-preferences.json`（按 scope 保存事件/目标/@/审批提醒延迟，0600）
-- 回复策略：`~/.dsh-lark/profiles/<profile>/reply-policies.json`（按 scope 保存合并窗口、批量/频率限制和近似去重窗口，0600）
-- 执行模式：`~/.dsh-lark/profiles/<profile>/execution-modes.json`（按 scope 保存 `quick/balanced/deep`，0600）
-- 工作空间：`~/.dsh-lark/profiles/<profile>/workspaces.json`
-- Git worktree：`~/.dsh-lark/profiles/<profile>/worktrees/`
-- 媒体目录：`~/.dsh-lark/profiles/<profile>/media/`
-- 运行日志：桥接引擎以 JSON Lines 输出到 stderr（由 dsh 宿主进程捕获；`logs/bot.log`
-  是 0.6.0 独立服务时代的遗留路径，0.7.0 起不再写入）
-- 后台服务环境 / 元数据：`~/.dsh-lark/service/<profile>.env|json`（POSIX 文件为 0600；Windows
-  环境快照用当前 access token SID 的 owner-only ACL 收紧）
-- 后台服务运维意图：`~/.dsh-lark/service/<profile>.intent.json`（0600；stop/uninstall 后阻止 guardian 回拉）
-- 后台服务日志：`~/.dsh-lark/profiles/<profile>/logs/service.log`
-- 多机器人实例登记：`~/.dsh-lark/fleet.json`（0600；身份/profile 元数据，不含密钥）
-- 多机器人交接计数：`~/.dsh-lark/handoffs.json`（0600；chat 计数与近期 messageId）
-- 多机器人独立 dsh 配置：`~/.dsh-lark/bots/<name>/dsh/`（provider settings、credentials、runtime profiles）
-- 附加实例 adapter：`sdk` / `acp` / legacy `headless`；拒绝无法隔离广播 session 的共享 `web`
-- 守护心跳：`~/.dsh-lark/profiles/<profile>/guardian/heartbeat.json`（桥接引擎周期写入）
-- 飞书内更新状态：`~/.dsh-lark/profiles/<profile>/guardian/update.json`（0600；目标版本、请求路由、执行结果与回执状态）
-
-dsh runtime profile（由 bot 首次启动自动创建于 `~/.dsh/profiles/`）：
-
-- `dsh-lark-sdk`：SDK JSON-RPC runtime（`DSH_LARK_ADAPTER=sdk`，显式选择）
-- `dsh-lark-acp`：ACP runtime（`DSH_LARK_ADAPTER=acp`，审批）
-- `dsh-lark-safe`：仅核心安全 profile（`/safemode` 时由守护创建，`dsh-base` + `dsh-headless`）
-- `dsh-lark-safe-sdk`：安全模式的 SDK 流式 runtime（`/safemode` 时由守护优先创建，
-  `dsh-base` + `dsh-sdk-jsonrpc-server`，无第三方插件；失败自动回退 `dsh-lark-safe`）
-
-可通过 `DSH_LARK_HOME` 修改状态根目录；`DSH_LARK_RUN_TIMEOUT_MS` 控制单次运行空闲超时
-（持续无活动事件才终止），`DSH_LARK_STOP_GRACE_MS` 控制优雅退出宽限期。
-
-## 8. 卸载
-
-```bash
-dsh-lark-bot guardian uninstall   # 仅安装过守护时需要
-dsh-lark-bot service uninstall --profile dsh-lark  # 仅安装过正常后台服务时需要
-dsh plugin --profile dsh-lark remove dsh-lark-bot
-```
-
-卸载后 profile 不再加载插件；本地状态保留在 `~/.dsh-lark`，如需清除请先备份再删除该目录。
+插件卸载不会自动删除 `~/.dsh-lark` 或工作区中的 `.session_aliases.json`，便于重新安装或人工备份。

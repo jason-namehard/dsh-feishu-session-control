@@ -81,6 +81,12 @@ function createHostRun(
     cwd: string | undefined;
     provider: string | undefined;
     model: string | undefined;
+    origin: AgentRunOptions['origin'];
+    onPrompt?: (input: {
+      sessionId: string;
+      rpcId: string;
+      origin: NonNullable<AgentRunOptions['origin']>;
+    }) => Promise<void>;
   },
 ): HostRunHandle {
   const channel = new EventChannel<AgentEvent>();
@@ -137,7 +143,14 @@ function createHostRun(
         throw new Error('dsh host context exposes no session event bus');
       }
 
-      agent.followup(await services.userMessage(extractUserText(options.prompt)));
+      const promptRpcId = randomUUID();
+      if (options.origin) {
+        await options.onPrompt?.({ sessionId, rpcId: promptRpcId, origin: options.origin });
+      }
+      agent.followup(await services.userMessage(
+        extractUserText(options.prompt),
+        options.origin ? { client: 'feishu', rpcId: promptRpcId } : undefined,
+      ));
 
       await new Promise<void>((resolve) => {
         void turnEnded.promise.then(() => resolve());
@@ -221,6 +234,11 @@ export class HostDshAdapter implements AgentAdapter {
   private readonly services: HostServices;
   private readonly provider: string | undefined;
   private readonly model: string;
+  private promptObserver: ((input: {
+    sessionId: string;
+    rpcId: string;
+    origin: NonNullable<AgentRunOptions['origin']>;
+  }) => Promise<void>) | undefined;
   private disposed = false;
 
   constructor(options: HostAdapterOptions) {
@@ -263,6 +281,8 @@ export class HostDshAdapter implements AgentAdapter {
       cwd: options.cwd ?? process.cwd(),
       provider: options.provider ?? this.provider,
       model: options.model ?? this.model,
+      origin: options.origin,
+      ...(this.promptObserver ? { onPrompt: this.promptObserver } : {}),
     });
     return {
       runId: options.runId,
@@ -273,6 +293,14 @@ export class HostDshAdapter implements AgentAdapter {
       },
       waitForExit: (timeoutMs: number) => waitWithTimeout(handle.settled, timeoutMs),
     };
+  }
+
+  setPromptObserver(observer: ((input: {
+    sessionId: string;
+    rpcId: string;
+    origin: NonNullable<AgentRunOptions['origin']>;
+  }) => Promise<void>) | undefined): void {
+    this.promptObserver = observer;
   }
 
   async dispose(): Promise<void> {

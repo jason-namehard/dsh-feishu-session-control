@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: DSH飞书Session控制
-  text: 把 DeepSeek Harness 装进飞书 / Lark
-  tagline: 扫码即用，在手机飞书里指挥本机 coding agent。流式卡片、并行任务、多角色 Agent、跨会话主动通知、通知转发到其他 IM 与安全网守护。
+  text: 用飞书按需连接和管理 DSH Session
+  tagline: Web 会话默认独立；飞书首次消息创建专属 session；半衔接与完整衔接可随时切换。
   image:
     src: /logo.svg
     alt: DSH飞书Session控制
@@ -13,69 +13,55 @@ hero:
       text: 快速开始
       link: /guide/quickstart
     - theme: alt
-      text: 通知转发到其他 IM
-      link: /guide/notification-sinks
+      text: 命令速览
+      link: /guide/commands
 
 features:
-  - icon: 🛡️
-    title: 安全网守护
-    details: 唯一「dsh 崩溃后飞书仍叫得应」：守护接管飞书通道，/safemode 进入仅核心安全模式自愈。
-  - icon: 🧑‍💻
-    title: 多角色 Agent
-    details: 一个机器人绑定 PM / 开发 / 文档等角色，各有持久化人设、模型偏好与规则。
-  - icon: 🤝
-    title: 多机器人可信交接
-    details: 每实例独立身份、服务、凭据与上下文；同群只接受登记 peer 的真实 @ 交接。
-  - icon: ⚡
-    title: 并行多任务
-    details: 同一群里同时跑多个任务、会话隔离；每会话自动创建独立 git worktree。
-  - icon: 📣
-    title: 跨会话通知 + @人
-    details: 任务完成主动推送到其他群 / 私聊并 @ 你。
-  - icon: 📤
-    title: 通知转发到其他 IM
-    details: 把完成 / 失败 / 审批 / 突发故障通知单向转发到 Telegram、企业微信等（纯通知）。
-  - icon: 🎛️
-    title: dsh Web 可视化设置
-    details: 官方 Settings → Plugins 里查看和修改应用、workspace、模型、并行数与提醒。
-  - icon: 📋
-    title: 关键任务计划门禁
-    details: 先出完整计划，再由卡片批准执行或带意见继续规划，原任务自动续跑。
-  - icon: 🧾
-    title: 崩溃后任务对账
-    details: 消息先持久落盘再入队，重启恢复排队项；/jobs 查看 checkpoint 并显式重试。
+  - icon: 🔗
+    title: 按需连接
+    details: Web 创建的 session 默认与飞书无关；飞书首次消息自动建立独立半衔接。
+  - icon: 🔀
+    title: 半/完整衔接
+    details: 半衔接只返回飞书发起回合；完整衔接还会抄送同 session 的 Web/TUI 新回合。
   - icon: 🗂️
-    title: 会话归档与保留
-    details: /archive、/retention 管理旧任务与自动保留策略，会话列表不越积越多。
-  - icon: 🎚️
-    title: 执行模式
-    details: /mode 用双语卡片选择快速 / 平衡 / 深度，下一轮生效且不打断当前任务。
-  - icon: 🔑
-    title: 对话内模型 / 密钥管理
-    details: /model、/providers、/key 直接在聊天里查看、切换供应商、热更新密钥。
+    title: 跨空间会话管理
+    details: 稳定别名、当前聊天标记、重命名、回收站和二次确认永久删除集中管理。
+  - icon: ✅
+    title: 原生审批镜像
+    details: 插件不增加工具权限门，只同步 DSH 原生审批；Web 或飞书任一端批准即可。
+  - icon: 💬
+    title: 私聊与群聊
+    details: 每个聊天连接一套 session；群聊可按群设置是否必须 @ 机器人。
+  - icon: 🌐
+    title: 长连接
+    details: 使用飞书 WebSocket 事件流，不需要公网 IP、域名或内网穿透。
 
 ---
 
-::: warning 项目身份声明
-本项目正式名称为 **DSH飞书Session控制**，由 **见川**维护，是独立发布的整合与重构项目。
-GitHub 地址将在发布前补入；npm/DSH 兼容包名暂保留为 `dsh-lark-bot`。本项目从不提供 `.exe`
-或“下载即运行”的安装包。
+::: warning 来源声明
+本项目是 [PlutoKeating/dsh-lark-bot](https://github.com/PlutoKeating/dsh-lark-bot)（AGPL-3.0）的 fork，
+由 **见川**维护。当前仓库为
+[jason-namehard/dsh-feishu-session-control](https://github.com/jason-namehard/dsh-feishu-session-control)。
 :::
 
-## 一键安装
+## 安装
 
 ```bash
-npx dsh-lark-bot@latest setup --profile dsh-lark
+git clone https://github.com/jason-namehard/dsh-feishu-session-control.git
+cd dsh-feishu-session-control
+pnpm install
+pnpm build
+node bin/dsh-lark-bot.mjs setup --profile dsh-lark --package file:/absolute/path/to/dsh-feishu-session-control
+dsh --profile web
 ```
 
-然后 `dsh --profile dsh-lark` 启动，用飞书 / Lark App 扫码绑定。全程不需要公网服务器、域名或内网穿透。
+本 fork 尚未以独立 npm 包发布；不要使用 `npx dsh-lark-bot@latest`，该名称指向上游项目。
 
 ## 开始阅读
 
-- **[快速开始](/guide/quickstart)** — 安装、扫码绑定、群聊 @bot
-- **[核心功能](/guide/features)** — 十二项能力详解
-- **[命令速览](/guide/commands)** — 全部 `/` 命令
-- **[通知转发到其他 IM](/guide/notification-sinks)** — Telegram / 企业微信纯通知配置
-- **[配置](/guide/configuration)** — 环境变量 / profile / Web 设置
-- **[安全与权限](/guide/security)** — 白名单、密钥、假冒警示
-- **[排障与 FAQ](/guide/troubleshooting)** — 诊断 / 常见问题
+- **[快速开始](/guide/quickstart)** — 源码安装、飞书权限和首次验证
+- **[核心功能](/guide/features)** — 会话连接、管理与审批模型
+- **[命令速览](/guide/commands)** — 常用 `/` 命令
+- **[配置](/guide/configuration)** — 环境变量、profile 与群聊策略
+- **[安全与权限](/guide/security)** — 来源、凭据和审批边界
+- **[排障与 FAQ](/guide/troubleshooting)** — 常见问题与定位方式

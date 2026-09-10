@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runUpgrade } from '../../../src/cli/commands/upgrade.js';
 import { loadUpgradeState } from '../../../src/upgrade/state.js';
-import { guardianServiceFilePath } from '../../../src/guardian/install.js';
 
 const tempDirs: string[] = [];
 
@@ -30,11 +29,8 @@ interface Harness {
   out: string[];
   dshHome: string;
   larkHome: string;
-  guardianRoot: string;
   stateFile: string;
   pluginSpawn: ReturnType<typeof vi.fn>;
-  installGuardian: ReturnType<typeof vi.fn>;
-  restartGuardian: ReturnType<typeof vi.fn>;
   restartProfile: ReturnType<typeof vi.fn>;
   repairRuntime: ReturnType<typeof vi.fn>;
   readInstalledPackage: ReturnType<typeof vi.fn>;
@@ -44,11 +40,6 @@ interface Harness {
 function makeHarness(): Harness {
   const out: string[] = [];
   const pluginSpawn = vi.fn().mockResolvedValue(undefined);
-  const installGuardian = vi.fn().mockResolvedValue({
-    ok: true,
-    messages: ['守护状态已写入 /tmp/guardian.json'],
-  });
-  const restartGuardian = vi.fn().mockResolvedValue({ ok: true, message: 'guardian 已重启' });
   const restartProfile = vi.fn().mockResolvedValue({ ok: true, message: 'profile 已重启' });
   const repairRuntime = vi.fn().mockResolvedValue([
     { profile: 'dsh-lark-sdk', existed: true, repaired: true, ok: true },
@@ -67,11 +58,8 @@ function makeHarness(): Harness {
     out,
     dshHome: '',
     larkHome: '',
-    guardianRoot: '',
     stateFile: '',
     pluginSpawn,
-    installGuardian,
-    restartGuardian,
     restartProfile,
     repairRuntime,
     readInstalledPackage,
@@ -86,13 +74,10 @@ async function runWith(
   await runUpgrade({
     dshHome: harness.dshHome,
     larkHome: harness.larkHome,
-    ...(harness.guardianRoot ? { guardianRoot: harness.guardianRoot } : {}),
     stateFile: harness.stateFile,
     dshBin: '/fake/dsh/bin.js',
     output: (text) => harness.out.push(text),
     pluginSpawnFn: harness.pluginSpawn,
-    installGuardianFn: harness.installGuardian,
-    restartGuardianFn: harness.restartGuardian,
     restartProfileFn: harness.restartProfile,
     repairRuntimeFn: harness.repairRuntime,
     readInstalledPackageFn: harness.readInstalledPackage,
@@ -100,13 +85,6 @@ async function runWith(
     listProcessesFn: async () => [],
     ...options,
   });
-}
-
-/** Create a fake guardian service entry so detection reports it installed. */
-async function installFakeGuardian(root: string): Promise<void> {
-  const file = guardianServiceFilePath(process.platform, root);
-  await mkdir(join(file, '..'), { recursive: true });
-  await writeFile(file, '# fake guardian unit', 'utf8');
 }
 
 describe('dsh-lark-bot upgrade', () => {
@@ -126,7 +104,6 @@ describe('dsh-lark-bot upgrade', () => {
     expect(joined).toContain('已安装（profile dsh-lark）: 0.10.2');
     expect(joined).toContain('npm 最新: 0.11.0');
     expect(harness.pluginSpawn).not.toHaveBeenCalled();
-    expect(harness.installGuardian).not.toHaveBeenCalled();
     expect(harness.runDoctor).toHaveBeenCalled();
     // Doctor checks must inspect the bridge state profile, not the dsh runtime
     // profile being upgraded (regression: dsh profile name was passed before).
@@ -135,7 +112,7 @@ describe('dsh-lark-bot upgrade', () => {
     );
   });
 
-  it('upgrades package + guardian and records the change for rollback', async () => {
+  it('upgrades the package and records the change for rollback', async () => {
     const harness = makeHarness();
     harness.dshHome = await makeHome();
     harness.larkHome = await makeHome();
@@ -151,9 +128,6 @@ describe('dsh-lark-bot upgrade', () => {
       '/fake/dsh/bin.js',
       'dsh-lark',
       'dsh-lark-bot@0.12.0',
-    );
-    expect(harness.installGuardian).toHaveBeenCalledWith(
-      expect.objectContaining({ dshProfile: 'dsh-lark' }),
     );
     expect(harness.repairRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -180,7 +154,6 @@ describe('dsh-lark-bot upgrade', () => {
       toVersion: '0.12.0',
       profile: 'dsh-lark',
       packageSpec: 'dsh-lark-bot@0.12.0',
-      guardianInstalled: true,
     });
   });
 
@@ -209,17 +182,14 @@ describe('dsh-lark-bot upgrade', () => {
       'dsh plugin add completed but dsh-lark-bot@0.12.0 is not installed in profile dsh-lark',
     );
     expect(harness.repairRuntime).not.toHaveBeenCalled();
-    expect(harness.installGuardian).not.toHaveBeenCalled();
   });
 
   it('reports up-to-date without touching anything', async () => {
     const harness = makeHarness();
     harness.dshHome = await makeHome();
     harness.larkHome = await makeHome();
-    harness.guardianRoot = await makeHome();
     harness.stateFile = join(harness.larkHome, 'upgrade-state.json');
     await installFakePackage(harness.dshHome, 'dsh-lark', '0.11.0');
-    await installFakeGuardian(harness.guardianRoot);
 
     await runWith(harness, {
       yes: true,
@@ -228,7 +198,6 @@ describe('dsh-lark-bot upgrade', () => {
 
     expect(harness.out.join('')).toContain('已是最新');
     expect(harness.pluginSpawn).not.toHaveBeenCalled();
-    expect(harness.installGuardian).not.toHaveBeenCalled();
     expect(harness.repairRuntime).not.toHaveBeenCalled();
   });
 
@@ -246,7 +215,6 @@ describe('dsh-lark-bot upgrade', () => {
 
     expect(harness.out.join('')).toContain('已取消');
     expect(harness.pluginSpawn).not.toHaveBeenCalled();
-    expect(harness.installGuardian).not.toHaveBeenCalled();
   });
 
   it('aborts when npm latest is unreachable without --force', async () => {
@@ -278,7 +246,6 @@ describe('dsh-lark-bot upgrade', () => {
     // own.version is the repo's package.json version (0.11.0 in tests).
     const spec = harness.pluginSpawn.mock.calls[0]?.[2];
     expect(spec).toMatch(/^dsh-lark-bot@/);
-    expect(harness.installGuardian).toHaveBeenCalled();
   });
 
   it('--rollback reinstalls the previously recorded version', async () => {
@@ -297,7 +264,6 @@ describe('dsh-lark-bot upgrade', () => {
           toVersion: '0.11.0',
           profile: 'dsh-lark',
           packageSpec: 'dsh-lark-bot@0.11.0',
-          guardianInstalled: true,
         },
       }),
       'utf8',
@@ -338,7 +304,7 @@ describe('dsh-lark-bot upgrade', () => {
     expect(state?.lastUpgrade.pendingRestart).toBe(true);
   });
 
-  it('--restart triggers the guardian and profile restart helpers', async () => {
+  it('--restart triggers the profile restart helper', async () => {
     const harness = makeHarness();
     harness.dshHome = await makeHome();
     harness.larkHome = await makeHome();
@@ -357,7 +323,6 @@ describe('dsh-lark-bot upgrade', () => {
       ],
     });
 
-    expect(harness.restartGuardian).toHaveBeenCalled();
     expect(harness.restartProfile).toHaveBeenCalled();
     const state = await loadUpgradeState(harness.stateFile);
     expect(state?.lastUpgrade.pendingRestart).toBe(false);
@@ -409,21 +374,4 @@ describe('dsh-lark-bot upgrade', () => {
     expect((await loadUpgradeState(harness.stateFile))?.lastUpgrade.pendingRestart).toBe(true);
   });
 
-  it('--no-guardian skips the guardian install', async () => {
-    const harness = makeHarness();
-    harness.dshHome = await makeHome();
-    harness.larkHome = await makeHome();
-    harness.stateFile = join(harness.larkHome, 'upgrade-state.json');
-    await installFakePackage(harness.dshHome, 'dsh-lark', '0.10.2');
-
-    await runWith(harness, {
-      yes: true,
-      guardian: false,
-      fetchLatestFn: async () => '0.12.0',
-    });
-
-    expect(harness.pluginSpawn).toHaveBeenCalled();
-    expect(harness.installGuardian).not.toHaveBeenCalled();
-    expect(harness.out.join('')).toContain('已跳过 guardian（--no-guardian）');
-  });
 });

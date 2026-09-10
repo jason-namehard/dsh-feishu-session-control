@@ -7,6 +7,7 @@ import type { CommandContext } from '../../src/commands/index.js';
 import { SessionProjectionController } from '../../src/commands/session-projection.js';
 import { ScopeDirectory } from '../../src/bridge/scope-directory.js';
 import type { SessionProjectionBridge } from '../../src/session/projection-bridge.js';
+import type { DshSessionSummary } from '../../src/session/projection-protocol.js';
 import { SessionProjectionStore } from '../../src/session/projection-store.js';
 import { SessionStore } from '../../src/session/store.js';
 import { SessionAliasManager } from '../../src/session/alias-manager.js';
@@ -42,6 +43,7 @@ async function fixture(
         chatId: input.chatId,
         ...(input.threadId ? { threadId: input.threadId } : {}),
         initialSeq: input.prepared.snapshotSeq,
+        ...(input.connectionMode ? { connectionMode: input.connectionMode } : {}),
         ...(input.allowCrossScopeMigration ? { allowCrossScopeMigration: true } : {}),
         ...(input.expectedOwner ? { expectedOwner: input.expectedOwner } : {}),
       });
@@ -50,7 +52,7 @@ async function fixture(
     }),
   } as unknown as SessionProjectionBridge;
   const sendCard = vi.fn(async (_chatId: string, _card: object) => 'card');
-  const sendMarkdown = vi.fn(async () => undefined);
+  const sendMarkdown = vi.fn(async (_chatId: string, _markdown: string) => undefined);
   const updateCard = vi.fn(async (_messageId: string, _card: object) => undefined);
   const access = {
     isAdmin: (id: string | undefined) => !!id && admins.includes(id),
@@ -82,6 +84,17 @@ function commandContext(input: {
     channel: (input.controller as unknown as { deps: { channel: unknown } }).deps.channel,
     sessionProjection: input.controller,
   } as unknown as CommandContext;
+}
+
+function sessionSummary(input: { sessionId: string; title?: string; cwd?: string }): DshSessionSummary {
+  return {
+    sessionId: input.sessionId,
+    updatedAt: new Date(2026, 8, 5).getTime(),
+    running: false,
+    blank: false,
+    cwd: input.cwd ?? '/repo',
+    ...(input.title === undefined ? {} : { title: input.title }),
+  };
 }
 
 describe('session alias commands', () => {
@@ -423,5 +436,182 @@ describe('session alias commands', () => {
     expect(migrated.toast.type).toBe('success');
     expect(admin.sessions.resumeFor('chat-old', '/repo')).toBeUndefined();
     expect(admin.sessions.resumeFor('chat-new', '/repo')).toBe('s1');
+  });
+
+  it('automatically attaches the first Feishu turn in half mode and records its rpc correlation', async () => {
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.controller.connectFeishuTurn({
+      scope: 'chat-a', workspaceCwd: '/repo', chatId: 'chat-a', sessionId: 's1',
+      rpcId: 'rpc-feishu-1', feishuMessageId: 'message-feishu-1',
+    });
+    expect(f.bridge.bindConfirmed).toHaveBeenCalledWith(expect.objectContaining({
+      scope: 'chat-a', connectionMode: 'half', deliverHistory: false,
+      prepared: expect.objectContaining({ session: expect.objectContaining({ sessionId: 's1' }) }),
+    }));
+    expect(f.store.get('chat-a', '/repo')).toMatchObject({
+      sessionId: 's1', connectionMode: 'half', chatId: 'chat-a',
+    });
+    expect(f.store.correlationFor('chat-a', '/repo', 'rpc-feishu-1')).toMatchObject({
+      feishuMessageId: 'message-feishu-1',
+    });
+    expect(f.sessions.resumeFor('chat-a', '/repo')).toBe('s1');
+  });
+
+  it('switches a binding to full mode and consumes the card once', async () => {
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.store.bindExclusive({ scope: 'chat-a', workspaceCwd: '/repo', sessionId: 's1', chatId: 'chat-a', initialSeq: 5, connectionMode: 'half' });
+    await f.controller.handleConnectionCommand('switch', '', commandContext({ controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a' }));
+    expect(f.sendCard).toHaveBeenCalledOnce();
+    const pending = (f.controller as unknown as { pendingConnectionModes: Map<string, unknown> }).pendingConnectionModes;
+    const nonce = [...pending.keys()][0];
+    const result = await f.controller.handleAction({
+      value: { cmd: 'session-connection', action: 'full', nonce, scope: 'chat-a', workspaceCwd: '/repo', actorId: 'user-a' },
+      operatorId: 'user-a', chatId: 'chat-a', threadId: undefined, currentScope: 'chat-a',
+    });
+    expect(result.settle).toContain('完整衔接');
+    expect(f.store.get('chat-a', '/repo')?.connectionMode).toBe('full');
+  });
+
+  it('detaches Feishu routing while leaving the native DSH session intact', async () => {
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.store.bindExclusive({ scope: 'chat-a', workspaceCwd: '/repo', sessionId: 's1', chatId: 'chat-a', initialSeq: 5, connectionMode: 'full' });
+    f.sessions.set('chat-a', 's1', '/repo');
+    await f.controller.handleConnectionCommand('detach', '', commandContext({ controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a' }));
+    expect(f.store.get('chat-a', '/repo')).toBeUndefined();
+    expect(f.sessions.resumeFor('chat-a', '/repo')).toBeUndefined();
+    await expect(f.bridge.listSessions()).resolves.toEqual([expect.objectContaining({ sessionId: 's1' })]);
+    expect(f.sendMarkdown).toHaveBeenLastCalledWith('chat-a', expect.stringContaining('仍保留'), undefined);
+  });
+
+  it('resolves /use by full session id when the session has no alias', async () => {
+    // An alias only exists once something has listed the session, so a
+    // conversation created in the Web UI was unreachable from Feishu even
+    // though the Web UI shows its id.
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    vi.mocked(f.bridge.listSessions).mockResolvedValue([
+      sessionSummary({ sessionId: 's1', title: 'Release' }),
+      sessionSummary({ sessionId: 'session-0842', title: 'Web work' }),
+    ]);
+
+    await f.controller.handleAliasCommand('use', 'session-0842', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+
+    expect(f.bridge.prepare).toHaveBeenCalledWith('session-0842', '/repo');
+    expect(f.sendCard).toHaveBeenCalledOnce();
+  });
+
+  it('resolves /use by an unambiguous title, case-insensitively and by prefix', async () => {
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    vi.mocked(f.bridge.listSessions).mockResolvedValue([
+      sessionSummary({ sessionId: 's1', title: 'Release' }),
+      sessionSummary({ sessionId: 'session-0842', title: 'Web work' }),
+    ]);
+
+    await f.controller.handleAliasCommand('use', 'WEB', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+    expect(f.bridge.prepare).toHaveBeenCalledWith('session-0842', '/repo');
+
+    // A prefix is enough, but only while it stays unambiguous.
+    await f.controller.handleAliasCommand('use', 'Web w', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+    expect(f.bridge.prepare).toHaveBeenLastCalledWith('session-0842', '/repo');
+  });
+
+  it('answers an ambiguous title with a picker card instead of an error', async () => {
+    // Picking one of two near-identical titles would switch the chat to a
+    // conversation the operator did not mean, and a thrown error line left them
+    // holding aliases to retype — on a phone, out of one message and into
+    // another. The picker makes the choice a tap, and a pick still only opens
+    // the ordinary confirmation card, so a mis-tap rebinds nothing.
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    await f.aliases.registerSession('s2');
+    vi.mocked(f.bridge.listSessions).mockResolvedValue([
+      sessionSummary({ sessionId: 's1', title: 'Release pipeline' }),
+      sessionSummary({ sessionId: 's2', title: 'Release notes' }),
+    ]);
+
+    await expect(f.controller.handleAliasCommand('use', 'release', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }))).resolves.toBeUndefined();
+
+    expect(f.sendCard).toHaveBeenCalledTimes(1);
+    const card = JSON.stringify(f.sendCard.mock.calls[0]?.[1] ?? {});
+    // Every candidate is offered, with both the alias a button carries and the
+    // title that says which conversation it is.
+    expect(card).toContain('0905-1');
+    expect(card).toContain('0905-2');
+    expect(card).toContain('Release pipeline');
+    expect(card).toContain('Release notes');
+    expect(card).toContain('use-pick');
+    expect(card).toContain('"sessionId":"s1"');
+    expect(card).toContain('"sessionId":"s2"');
+    // A picker is not a confirmation: no binding happened yet.
+    expect(f.bridge.bindConfirmed).not.toHaveBeenCalled();
+  });
+
+  it('answers a bare /use with every session as its own row, plus a cancel', async () => {
+    // Typing an alias out of /sessions is the step bare /use removes — the alias
+    // is the one thing the operator cannot read off the chat itself.
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    await f.aliases.registerSession('s2');
+    vi.mocked(f.bridge.listSessions).mockResolvedValue([
+      sessionSummary({ sessionId: 's1', title: 'Release pipeline' }),
+      sessionSummary({ sessionId: 's2', title: 'Release notes' }),
+    ]);
+
+    await f.controller.handleAliasCommand('use', '', commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    }));
+
+    expect(f.sendCard).toHaveBeenCalledTimes(1);
+    const card = JSON.stringify(f.sendCard.mock.calls[0]?.[1] ?? {});
+    // Alias and title together: the alias is what the row carries, the title is
+    // what says which conversation it is.
+    expect(card).toContain('0905-1 · Release pipeline');
+    expect(card).toContain('0905-2 · Release notes');
+    expect(card).toContain('use-pick');
+    expect(card).toContain('use-cancel');
+    // One row per session. A `column_set` folds its overflow into a "more" menu
+    // once it holds a few columns, which hides the very options this card shows.
+    expect(card).not.toContain('column_set');
+    expect(f.bridge.bindConfirmed).not.toHaveBeenCalled();
+  });
+
+  it('keeps /delete and /purge alias-only, and reports an unknown /use argument as before', async () => {
+    // A prefix match that silently targets a near-identical sibling is
+    // survivable for /use — it only changes which conversation the chat
+    // follows — and is not for a command that removes the session for good.
+    const f = await fixture();
+    f.scopes.register('chat-a', 'chat-a', undefined, 'p2p', 'incoming');
+    await f.aliases.registerSession('s1');
+    vi.mocked(f.bridge.listSessions).mockResolvedValue([
+      sessionSummary({ sessionId: 's1', title: 'Release' }),
+      sessionSummary({ sessionId: 'session-0842', title: 'Webwork' }),
+    ]);
+    const ctx = () => commandContext({
+      controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
+    });
+
+    await expect(f.controller.handleAliasCommand('delete', 'Webwork', ctx()))
+      .rejects.toThrow('alias not found: Webwork');
+    await expect(f.controller.handleAliasCommand('purge', 'session-0842', ctx()))
+      .rejects.toThrow('alias not found: session-0842');
+    await expect(f.controller.handleAliasCommand('use', 'nope', ctx()))
+      .rejects.toThrow('alias not found: nope');
+    expect(f.sendCard).not.toHaveBeenCalled();
   });
 });

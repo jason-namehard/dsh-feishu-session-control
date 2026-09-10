@@ -32,9 +32,7 @@ import type { ApprovalOutcome, ApprovalRequest } from '../adapters/types.js';
 import type { QuestionCardInput } from '../card/question-card.js';
 import { archiveSessionDir, classifySessionError } from '../session/heal.js';
 import type { SendOptions } from './send-options.js';
-import type { PermissionPolicyStore } from '../bot/permission-policy-store.js';
 import type { ExecutionMode } from '../bot/execution-mode-store.js';
-import { permissionPolicyDenial, policyDenialText } from '../policy/tool-policy.js';
 import { renderChannelContext, type ChannelContext } from './channel-context.js';
 import type { SessionAliasManager } from '../session/alias-manager.js';
 
@@ -75,7 +73,6 @@ export interface RunFlowInput {
   /** Max concurrent runs allowed in the scope (queue enforces; guard is a fallback). */
   maxConcurrency?: number;
   approvals?: ApprovalRegistry;
-  permissionPolicies?: PermissionPolicyStore;
   onApprovalWaiting?: (scope: string, toolName: string) => () => void;
   questions?: QuestionRegistry;
   plans?: PlanApprovalRegistry;
@@ -85,7 +82,7 @@ export interface RunFlowInput {
    * Optional per-chat run-card anchor registry. When present the in-progress
    * process card is re-anchored to the tail whenever a new user-facing bubble
    * is delivered to the chat (see `run-card-anchors.ts`); omitted in the
-   * guardian's core-only profile and in tests.
+   * lightweight adapters and tests.
    */
   runCardAnchors?: RunCardAnchors;
   defaultWorkspace: string;
@@ -135,6 +132,8 @@ export interface RunFlowInput {
     nativeSessionId?: string;
   }) => void | Promise<void>;
   sessionAliases?: SessionAliasManager;
+  /** Release volatile Feishu-origin routing once this native turn settles. */
+  onSessionTurnFinished?: (sessionId: string) => void | Promise<void>;
 }
 
 export type RunBatchOutcome = 'completed' | 'failed' | 'interrupted';
@@ -254,6 +253,13 @@ async function runAttempt(
 ): Promise<Exclude<RunState['terminal'], 'running'>> {
   // Quiet is the default: acknowledge with a reaction, then deliver one result.
   const quiet = input.quietProgress !== false;
+  // A delegation's own `system` event also arrives on this attempt's stream, and
+  // a subagent must never own an alias: `/use` would offer an ephemeral child,
+  // which is exactly the noise the filtered sync prunes again a moment later.
+  // This attempt drives exactly one native session, and its `system` event is the
+  // first one seen — a child can only be spawned once the attempt is under way —
+  // so only the first event is worth registering.
+  let aliasRegistered = false;
   // With no progress card, a reaction on the user's own message is the only
   // signal that the bot saw them at all — without it a long run is
   // indistinguishable from being ignored. It costs no space in the chat, and
@@ -304,7 +310,6 @@ async function runAttempt(
             scope: input.scope,
             ownerSessionId: runId,
             sendOptions: replyOptions,
-            ...(input.permissionPolicies ? { permissionPolicies: input.permissionPolicies } : {}),
             ...(input.onApprovalWaiting ? { onApprovalWaiting: input.onApprovalWaiting } : {}),
           }),
         }
@@ -564,7 +569,10 @@ async function runAttempt(
               activeSessionId = event.sessionId;
               activeModel = modelRoute(input.provider, event.model ?? input.model);
               input.sessions.set(input.scope, event.sessionId, workspaceCwd);
-              await input.sessionAliases?.registerSession(event.sessionId);
+              if (!aliasRegistered) {
+                aliasRegistered = true;
+                await input.sessionAliases?.registerSession(event.sessionId);
+              }
             }
             if (event.type === 'thinking') await checkpoint('thinking');
             if (event.type === 'tool_use') await checkpoint('tool', event.name);
@@ -899,6 +907,9 @@ async function runAttempt(
     if (input.plans && activeSessionId !== undefined) {
       input.plans.settleSession(input.scope, activeSessionId);
     }
+    if (activeSessionId !== undefined) {
+      await input.onSessionTurnFinished?.(activeSessionId);
+    }
   }
   return state.terminal === 'running' ? 'interrupted' : state.terminal;
 }
@@ -948,29 +959,10 @@ export function approvalHandlerFor(
     scope: string;
     ownerSessionId?: string;
     sendOptions?: SendOptions;
-    permissionPolicies?: PermissionPolicyStore;
     onApprovalWaiting?: (scope: string, toolName: string) => () => void;
   },
 ): (request: ApprovalRequest) => Promise<ApprovalOutcome> {
   return async (request) => {
-    const policy = input.permissionPolicies?.get(input.scope) ?? 'ask';
-    if (policy === 'allow') return 'allowed-once';
-    if (policy === 'deny') {
-      const denial = permissionPolicyDenial(input.scope, request.toolName);
-      try {
-        await input.channel.sendMarkdown?.(
-          input.chatId,
-          bilingualMarkdown(
-            `⛔ **权限策略拒绝**\n\n\`\`\`text\n${policyDenialText(denial)}\n\`\`\``,
-            `⛔ **Permission policy denial**\n\n\`\`\`text\n${policyDenialText(denial)}\n\`\`\``,
-          ),
-          input.sendOptions,
-        );
-      } catch (error) {
-        log.warn('approval-policy', 'deny-notice-failed', { scope: input.scope, error });
-      }
-      return 'rejected';
-    }
     if (!input.approvals || !input.channel.sendCard) return 'cancelled';
     const cardRequest: ApprovalRequest = {
       ...request,

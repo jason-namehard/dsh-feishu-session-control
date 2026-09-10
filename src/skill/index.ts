@@ -22,8 +22,7 @@ export interface Config {
  * registers it on the agent runtime's context, so `skill("dsh-lark-bot")`
  * resolves in a live SDK session.
  *
- * This entry is intentionally dependency-free (only the `skills` service) so
- * it can also load in the guardian's core-only safe profile.
+ * This entry is intentionally dependency-free beyond the `skills` service.
  */
 export function apply(ctx: Context) {
   const registry = (

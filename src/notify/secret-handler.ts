@@ -2,16 +2,22 @@ import type { SessionStore } from '../session/store.js';
 import type { ScopeDirectory } from '../bridge/scope-directory.js';
 import type { SecretRequestRegistry, SecretTargetType } from '../secret/registry.js';
 import { renderSecretCard } from '../card/secret-card.js';
+import type { CanRouteSessionToFeishu } from './can-route.js';
 
 export interface SecretPayload { token: string; sessionId: string; target: SecretTargetType; reference: string; purpose?: string }
 export interface SecretResult { ok: boolean; target?: SecretTargetType; reference?: string; configured?: boolean; error?: string }
 
 export function buildSecretHandler(deps: {
   sessions: SessionStore; scopes: ScopeDirectory; requests: SecretRequestRegistry;
+  canRouteSessionToFeishu?: CanRouteSessionToFeishu;
   actorForSession(sessionId: string): string | undefined; isAdmin(actor: string | undefined): boolean;
   sendCard(chatId: string, card: object, options?: { threadId?: string; replyTo?: string }): Promise<string | undefined>;
 }) {
   return async (payload: SecretPayload, signal?: AbortSignal): Promise<SecretResult> => {
+    const canRoute = deps.canRouteSessionToFeishu;
+    if (canRoute !== undefined && (await canRoute(payload.sessionId)) === false) {
+      return { ok: false, error: `session is not currently connected to Feishu: ${payload.sessionId}` };
+    }
     const scope = deps.sessions.scopeForSession(payload.sessionId);
     if (!scope) return { ok: false, error: 'unknown session' };
     const ownerId = deps.actorForSession(payload.sessionId);

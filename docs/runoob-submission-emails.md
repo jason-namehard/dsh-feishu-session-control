@@ -8,22 +8,22 @@
 
 ## 1. 投稿邮件（主要通道）
 
-**主题：**【DeepSeek Harness 栏目投稿】DeepSeek Harness 连接飞书（dsh-lark-bot 桥接插件）
+**主题：**【DeepSeek Harness 栏目投稿】用飞书管理独立 DSH Session
 
 **正文：**
 
 > 管理员您好：
 >
 > 我是一位开源项目作者，希望向贵站「DeepSeek Harness 教程」栏目投稿一篇原创教程：
-> 《DeepSeek Harness 连接飞书（dsh-lark-bot 桥接插件）》。
+> 《用飞书管理独立 DeepSeek Harness Session》一文。
 >
 > 文章内容：把 DeepSeek Harness（dsh）接入飞书 / Lark 的完整教程，包含前置条件、
-> 一条命令安装、扫码绑定、常用命令表、六大核心能力（安全网守护 / 多角色 Agent / 并行任务 /
-> 会话归档 / 跨会话通知 / 对话内模型密钥管理）、安全性说明、升级卸载与常见问题。
-> 教程对应开源项目：https://github.com/PlutoKeating/dsh-lark-bot
+> 源码安装、长连接配置、跨工作空间会话别名、回收站与永久删除、Web 会话管理、
+> 半衔接/完整衔接、群聊响应策略、统一原生审批、升级卸载与常见问题。
+> 教程对应开源项目：https://github.com/jason-namehard/dsh-feishu-session-control
 >
 > 投稿信息：
-> - 昵称：dsh-lark-bot
+> - 昵称：见川
 > - E-Mail：<你的邮箱>
 > - 引用地址：https://www.runoob.com/deepseek-harness/
 >

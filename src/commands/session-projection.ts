@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   renderSessionBindingConfirmCard,
+  renderSessionConnectionModeCard,
   type SessionActionIdentity,
 } from '../card/session-projection-card.js';
 import { bilingualMarkdown } from '../card/i18n.js';
@@ -11,8 +12,10 @@ import { memberOwnerForScope } from '../bridge/scope-isolation.js';
 import type { CommandChannel, CommandContext } from './index.js';
 import type { PreparedSessionBinding, SessionProjectionBridge } from '../session/projection-bridge.js';
 import type { SessionProjectionStore } from '../session/projection-store.js';
+import type { FeishuConnectionMode } from '../session/projection-store.js';
 import type { SessionAliasManager } from '../session/alias-manager.js';
 import {
+  renderSessionCandidateCard,
   renderSessionDeleteConfirmCard,
   renderSessionNameCard,
 } from '../card/session-alias-card.js';
@@ -58,6 +61,37 @@ interface PendingRename {
   timer: NodeJS.Timeout;
 }
 
+interface PendingConnectionMode {
+  nonce: string;
+  actorId: string;
+  scope: string;
+  workspaceCwd: string;
+  sessionId: string;
+  chatId: string;
+  threadId?: string;
+  expiresAt: number;
+  timer: NodeJS.Timeout;
+}
+
+/** One session-command argument, resolved to the session it names. */
+interface ResolvedSessionArgument {
+  sessionId: string;
+  /** Canonical alias of the resolved session, when it has one. */
+  alias?: string;
+  /** How to name this target in a message: `alias 0905-1` or `session <id>`. */
+  label: string;
+}
+
+/**
+ * An argument that named more than one session.
+ *
+ * Distinguished from a failure on purpose: `/use DSH` matching two sessions is a
+ * question, not an error, and it is answered with a picker card.
+ */
+interface AmbiguousSessionArgument {
+  candidates: Array<{ sessionId: string; alias?: string; title?: string }>;
+}
+
 export interface SessionProjectionActionResult {
   toast: { type: 'success' | 'info' | 'error'; content: string };
   /**
@@ -87,6 +121,7 @@ export class SessionProjectionController {
   private readonly pending = new Map<string, PendingBinding>();
   private readonly pendingDeletions = new Map<string, PendingDeletion>();
   private readonly pendingRenames = new Map<string, PendingRename>();
+  private readonly pendingConnectionModes = new Map<string, PendingConnectionMode>();
 
   constructor(private readonly deps: {
     bridge: SessionProjectionBridge;
@@ -103,6 +138,13 @@ export class SessionProjectionController {
     if (!this.deps.aliases) throw new Error('session aliases are not configured');
     const actorId = this.requireAuthorized(ctx.scope, ctx.chatId, ctx.chatMode, ctx.senderId);
     const alias = args.trim().split(/\s+/u).filter(Boolean)[0];
+    if (command === 'use' && !alias) {
+      // Bare `/use` opens the picker instead of printing a usage line: the alias
+      // is the one thing the operator cannot read off the chat, and typing one
+      // out of `/sessions` on a phone is the step worth removing.
+      await this.sendSessionPicker({ actorId, ctx });
+      return;
+    }
     if (command !== 'sessions' && !alias) {
       throw new Error(`Usage: /${command} <MMDD-N>`);
     }
@@ -130,6 +172,7 @@ export class SessionProjectionController {
       const boundCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
       const boundSessionId = this.deps.store.get(ctx.scope, boundCwd)?.sessionId
         ?? this.deps.sessions.resumeFor(ctx.scope, boundCwd);
+      const connection = this.deps.store.get(ctx.scope, boundCwd);
       // Rendered once, not bilingually: every line is aliases, titles and ids,
       // which read identically in both languages, so a bilingual list repeated
       // the whole thing and looked like the bot had sent two cards.
@@ -149,7 +192,12 @@ export class SessionProjectionController {
           const status = session.trashed
             ? '🗑 回收站'
             : session.running ? '▶ 运行中' : '· 空闲';
-          const here = entry.sessionId === boundSessionId ? ' ← **当前对话**' : '';
+          const modeLabel = connection?.sessionId === entry.sessionId
+            ? ` · **${connection.connectionMode === 'full' ? '完整衔接' : '半衔接'}**`
+            : ' · 未连接飞书';
+          const here = entry.sessionId === boundSessionId
+            ? ` ← **当前对话**${modeLabel}`
+            : '';
           lines.push(`- \`${entry.alias}\` · **${title}** · ${status}${here}`);
         }
         if (boundSessionId === undefined) {
@@ -168,26 +216,36 @@ export class SessionProjectionController {
       );
       return;
     }
-    const sessionId = this.deps.aliases.getSessionId(alias!);
-    if (!sessionId) throw new Error(`alias not found: ${alias}`);
-    const session = (await this.deps.bridge.listSessions()).find((item) => item.sessionId === sessionId);
+    const resolved = await this.resolveSessionArgument(command, alias!);
+    if ('candidates' in resolved) {
+      await this.sendCandidatePicker({
+        argument: alias!,
+        candidates: resolved.candidates,
+        actorId,
+        ctx,
+      });
+      return;
+    }
+    const target = resolved;
+    const session = (await this.deps.bridge.listSessions())
+      .find((item) => item.sessionId === target.sessionId);
     if (!session) {
-      await this.deps.aliases.removeAlias(alias!);
-      throw new Error(`session for alias ${alias} was already deleted`);
+      if (target.alias !== undefined) await this.deps.aliases.removeAlias(target.alias);
+      throw new Error(`session for ${target.label} was already deleted`);
     }
     if (command === 'use' && session.trashed) {
-      throw new Error(`alias ${alias} is in the recycle bin; restore it from the DSH Web session manager first`);
+      throw new Error(`${target.label} is in the recycle bin; restore it from the DSH Web session manager first`);
     }
     if (command === 'delete' && session.trashed) {
-      throw new Error(`alias ${alias} is already in the recycle bin; use /purge ${alias} for permanent deletion`);
+      throw new Error(`${target.label} is already in the recycle bin; use /purge ${target.label} for permanent deletion`);
     }
     const workspaceCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
     if (command === 'use') {
       if (session.cwd && session.cwd !== workspaceCwd) {
-        throw new Error(`alias ${alias} belongs to workspace ${session.cwd}; switch workspace first`);
+        throw new Error(`${target.label} belongs to workspace ${session.cwd}; switch workspace first`);
       }
       await this.prepareConfirmation({
-        sessionId,
+        sessionId: target.sessionId,
         identity: { scope: ctx.scope, workspaceCwd, actorId },
         chatId: ctx.chatId,
         ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
@@ -195,7 +253,7 @@ export class SessionProjectionController {
       return;
     }
     await this.prepareDeletion({
-      alias: alias!,
+      alias: target.alias ?? target.sessionId,
       session,
       mode: command === 'purge' ? 'purge' : 'trash',
       actorId,
@@ -204,6 +262,144 @@ export class SessionProjectionController {
       chatId: ctx.chatId,
       ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
     });
+  }
+
+  /**
+   * Resolve a session command's argument to the session it names.
+   *
+   * `/use` accepts three forms, in order: an alias (what the bot prints), an
+   * exact session id, and an unambiguous title — case-insensitively, where a
+   * prefix is enough. A session created in the Web UI has no alias until
+   * something has listed it, so someone reading a title off the Web UI had no
+   * way to select that conversation from Feishu at all.
+   *
+   * `/delete` and `/purge` deliberately keep the alias-only contract: silently
+   * targeting a near-identical sibling is survivable when it only changes which
+   * conversation a chat follows, and is not when it permanently removes one.
+   *
+   * @param command - the session command whose argument is being resolved.
+   * @param argument - the alias, session id or title prefix that was typed.
+   * @returns the session to act on, plus how to name it back to the user.
+   */
+  private async resolveSessionArgument(
+    command: 'use' | 'delete' | 'purge',
+    argument: string,
+  ): Promise<ResolvedSessionArgument | AmbiguousSessionArgument> {
+    const aliases = this.deps.aliases;
+    if (!aliases) throw new Error('session aliases are not configured');
+    const fromAlias = aliases.getSessionId(argument);
+    if (fromAlias) return this.describeTarget(fromAlias, aliases);
+    if (command !== 'use') throw new Error(`alias not found: ${argument}`);
+    const sessions = await this.deps.bridge.listSessions();
+    const exact = sessions.find((session) => session.sessionId === argument);
+    if (exact) return this.describeTarget(exact.sessionId, aliases);
+    const needle = argument.toLowerCase();
+    const matches = sessions.filter((session) => {
+      const title = session.title?.trim().toLowerCase();
+      return title !== undefined && title !== '' && title.startsWith(needle);
+    });
+    if (matches.length > 1) {
+      // Not an error: several sessions legitimately share a prefix, and the
+      // caller answers with a picker rather than a line to retype.
+      const aliasBySessionId = new Map(aliases.entries().map((entry) => [entry.sessionId, entry.alias]));
+      return {
+        candidates: matches.map((session) => {
+          const alias = aliasBySessionId.get(session.sessionId);
+          const title = session.title?.trim();
+          return {
+            sessionId: session.sessionId,
+            ...(alias === undefined ? {} : { alias }),
+            ...(title === undefined || title === '' ? {} : { title }),
+          };
+        }),
+      };
+    }
+    const [only] = matches;
+    if (!only) throw new Error(`alias not found: ${argument}`);
+    return this.describeTarget(only.sessionId, aliases);
+  }
+
+  /**
+   * Offer every session in the workspace as a tappable row.
+   *
+   * This is what bare `/use` sends. The alias table is the only directory of
+   * conversations the chat has, and reading an alias out of `/sessions` only to
+   * type it into the next message is the step this removes.
+   */
+  private async sendSessionPicker(input: { actorId: string; ctx: CommandContext }): Promise<void> {
+    const sessions = await this.deps.bridge.listSessions();
+    const aliasBySessionId = new Map(
+      (this.deps.aliases?.entries() ?? []).map((entry) => [entry.sessionId, entry.alias]),
+    );
+    const candidates = sessions.map((session) => {
+      const alias = aliasBySessionId.get(session.sessionId);
+      const title = session.title?.trim();
+      return {
+        sessionId: session.sessionId,
+        ...(alias === undefined ? {} : { alias }),
+        ...(title === undefined || title === '' ? {} : { title }),
+      };
+    });
+    if (candidates.length === 0) {
+      await this.deps.channel.sendMarkdown(
+        input.ctx.chatId,
+        bilingualMarkdown(
+          '暂无可用会话。发一条消息会自动新建一个。',
+          'No sessions available. Sending a message creates one.',
+        ),
+        this.options(input.ctx.threadId),
+      );
+      return;
+    }
+    await this.sendCandidatePicker({ candidates, actorId: input.actorId, ctx: input.ctx });
+  }
+
+  /**
+   * Answer an ambiguous — or omitted — `/use` argument with one row per session.
+   *
+   * Falling back to a thrown line when the channel cannot render cards keeps the
+   * command usable everywhere, and the message is bilingual either way.
+   */
+  private async sendCandidatePicker(input: {
+    argument?: string;
+    candidates: ReadonlyArray<{ sessionId: string; alias?: string; title?: string }>;
+    actorId: string;
+    ctx: CommandContext;
+  }): Promise<void> {
+    if (!this.deps.channel.sendCard) {
+      const aliases = input.candidates
+        .map((candidate) => candidate.alias ?? candidate.sessionId)
+        .join('、');
+      const what = input.argument === undefined ? '当前工作空间有' : `“${input.argument}”匹配到`;
+      throw new Error(
+        `${what} ${input.candidates.length} 个会话（${aliases}）；请改用其中一个别名，或直接给完整 session id。\n`
+        + `${input.argument === undefined ? 'This workspace has' : `"${input.argument}" matches`} ${input.candidates.length} sessions (${aliases}); use one of those aliases or a full session id.`,
+      );
+    }
+    const identity = {
+      scope: input.ctx.scope,
+      workspaceCwd: input.ctx.workspaces.cwdFor(input.ctx.scope) ?? input.ctx.defaultWorkspace,
+      actorId: input.actorId,
+    };
+    await this.deps.channel.sendCard(
+      input.ctx.chatId,
+      renderSessionCandidateCard({
+        ...(input.argument === undefined ? {} : { argument: input.argument }),
+        candidates: input.candidates,
+        scope: identity.scope,
+        workspaceCwd: identity.workspaceCwd,
+        actorId: identity.actorId,
+      }),
+      this.options(input.ctx.threadId),
+    );
+  }
+
+  /** Name a resolved session the way this file's messages do. */
+  private describeTarget(sessionId: string, aliases: SessionAliasManager): ResolvedSessionArgument {
+    const alias = aliases.entries().find((entry) => entry.sessionId === sessionId)?.alias;
+    return alias === undefined
+      ? { sessionId, label: `session ${sessionId}` }
+      : { sessionId, alias, label: `alias ${alias}` };
   }
 
   /**
@@ -346,14 +542,93 @@ export class SessionProjectionController {
     if (!this.deps.aliases) throw new Error('session aliases are not configured');
     const sessionId = await this.deps.bridge.createSession(workspaceCwd);
     const alias = await this.deps.aliases.registerSession(sessionId);
-    this.deps.sessions.clearSessionElsewhere(sessionId, ctx.scope, workspaceCwd);
-    this.deps.sessions.set(ctx.scope, sessionId, workspaceCwd);
+    await this.attachSession({
+      scope: ctx.scope,
+      workspaceCwd,
+      chatId: ctx.chatId,
+      ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+      sessionId,
+      connectionMode: 'half',
+    });
     return alias;
+  }
+
+  async connectFeishuTurn(input: {
+    scope: string;
+    workspaceCwd: string;
+    chatId: string;
+    threadId?: string;
+    sessionId: string;
+    rpcId: string;
+    feishuMessageId: string;
+  }): Promise<void> {
+    let binding = this.deps.store.get(input.scope, input.workspaceCwd);
+    if (!binding || binding.sessionId !== input.sessionId) {
+      binding = await this.attachSession({ ...input, connectionMode: 'half' });
+    }
+    await this.deps.store.recordCorrelation(
+      input.scope,
+      input.workspaceCwd,
+      input.sessionId,
+      { rpcId: input.rpcId, feishuMessageId: input.feishuMessageId, createdAt: Date.now() },
+    );
+  }
+
+  async handleConnectionCommand(command: 'switch' | 'detach', args: string, ctx: CommandContext): Promise<void> {
+    if (args.trim()) throw new Error(`Usage: /${command}`);
+    const actorId = this.requireAuthorized(ctx.scope, ctx.chatId, ctx.chatMode, ctx.senderId);
+    const workspaceCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
+    const binding = this.deps.store.get(ctx.scope, workspaceCwd);
+    if (command === 'detach') {
+      if (!binding) {
+        await ctx.channel.sendMarkdown(
+          ctx.chatId,
+          bilingualMarkdown('当前聊天没有连接飞书会话。', 'This chat has no attached DSH session.'),
+          this.options(ctx.threadId),
+        );
+        return;
+      }
+      await this.deps.store.remove(ctx.scope, workspaceCwd);
+      this.deps.sessions.clearSession(ctx.scope, workspaceCwd);
+      await ctx.channel.sendMarkdown(
+        ctx.chatId,
+        bilingualMarkdown(
+          `🔌 已断开飞书连接；DSH session \`${binding.sessionId}\` 仍保留。下一条普通消息会创建新的独立会话。`,
+          `🔌 Detached from Feishu; DSH session \`${binding.sessionId}\` remains. The next ordinary message creates a new independent session.`,
+        ),
+        this.options(ctx.threadId),
+      );
+      return;
+    }
+    if (!binding) throw new Error('当前聊天还没有连接会话；先发一条普通消息或使用 /use <别名>');
+    if (!this.deps.channel.sendCard) throw new Error('当前渠道不支持模式切换卡片');
+    const nonce = randomUUID();
+    const expiresAt = Date.now() + (this.deps.confirmationTtlMs ?? 10 * 60_000);
+    const timer = setTimeout(() => this.pendingConnectionModes.delete(nonce), expiresAt - Date.now());
+    timer.unref?.();
+    this.pendingConnectionModes.set(nonce, {
+      nonce,
+      actorId,
+      scope: ctx.scope,
+      workspaceCwd,
+      sessionId: binding.sessionId,
+      chatId: ctx.chatId,
+      ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+      expiresAt,
+      timer,
+    });
+    await this.deps.channel.sendCard(ctx.chatId, renderSessionConnectionModeCard({
+      nonce,
+      identity: { scope: ctx.scope, workspaceCwd, actorId },
+      sessionId: binding.sessionId,
+      currentMode: binding.connectionMode,
+    }), this.options(ctx.threadId));
   }
 
   async handleAction(input: SessionProjectionActionInput): Promise<SessionProjectionActionResult> {
     if (input.value.cmd === 'session-alias') return this.handleAliasAction(input);
     if (input.value.cmd === 'session-rename') return this.handleRenameAction(input);
+    if (input.value.cmd === 'session-connection') return this.handleConnectionAction(input);
     this.pruneExpired();
     const action = typeof input.value.action === 'string' ? input.value.action : '';
     const requestedScope = typeof input.value.scope === 'string' ? input.value.scope : '';
@@ -393,6 +668,7 @@ export class SessionProjectionController {
         chatId: pending.chatId,
         ...(pending.threadId ? { threadId: pending.threadId } : {}),
         prepared: pending.prepared,
+        connectionMode: 'half',
         // Switching a chat to another session must not replay that session's
         // transcript into Feishu. Someone runs /use because they already know
         // what the other window did; re-reading it back at them buries the
@@ -447,6 +723,56 @@ export class SessionProjectionController {
     this.pendingDeletions.clear();
     for (const pending of this.pendingRenames.values()) clearTimeout(pending.timer);
     this.pendingRenames.clear();
+    for (const pending of this.pendingConnectionModes.values()) clearTimeout(pending.timer);
+    this.pendingConnectionModes.clear();
+  }
+
+  private async handleConnectionAction(input: SessionProjectionActionInput): Promise<SessionProjectionActionResult> {
+    this.pruneExpired();
+    const requestedScope = typeof input.value.scope === 'string' ? input.value.scope : '';
+    const workspaceCwd = typeof input.value.workspaceCwd === 'string' ? input.value.workspaceCwd : '';
+    const cardActor = typeof input.value.actorId === 'string' ? input.value.actorId : '';
+    if (!input.operatorId || input.operatorId !== cardActor || requestedScope !== input.currentScope) {
+      return { toast: { type: 'error', content: '身份或 scope 不匹配 / Operator or scope mismatch' } };
+    }
+    const entry = this.deps.scopes.entry(requestedScope);
+    const chatMode = entry?.chatMode ?? (input.threadId ? 'topic' : 'group');
+    try {
+      this.requireAuthorized(requestedScope, input.chatId, chatMode, input.operatorId);
+      const nonce = typeof input.value.nonce === 'string' ? input.value.nonce : '';
+      const pending = this.pendingConnectionModes.get(nonce);
+      if (!pending || pending.expiresAt <= Date.now() || pending.actorId !== input.operatorId ||
+          pending.scope !== requestedScope || pending.workspaceCwd !== workspaceCwd ||
+          pending.chatId !== input.chatId || pending.threadId !== input.threadId) {
+        if (pending) clearTimeout(pending.timer);
+        this.pendingConnectionModes.delete(nonce);
+        throw new Error('mode card expired or no longer matches its original session');
+      }
+      const mode = input.value.action === 'full' ? 'full' : input.value.action === 'half' ? 'half' : undefined;
+      if (!mode) throw new Error('unknown connection mode');
+      clearTimeout(pending.timer);
+      this.pendingConnectionModes.delete(nonce);
+      const current = this.deps.store.get(pending.scope, pending.workspaceCwd);
+      if (!current || current.sessionId !== pending.sessionId) {
+        throw new Error('session attachment changed; send /switch again');
+      }
+      await this.deps.store.setConnectionMode(pending.scope, pending.workspaceCwd, mode);
+      const zhMode = mode === 'full' ? '完整衔接' : '半衔接';
+      const enMode = mode === 'full' ? 'Full connection' : 'Half connection';
+      return {
+        toast: { type: 'success', content: `已切换为${zhMode} / ${enMode}` },
+        settle: bilingualMarkdown(
+          `✅ 已切换为 **${zhMode}**。`,
+          `✅ Switched to **${enMode}**.`,
+        ),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        toast: { type: 'error', content: message },
+        settle: bilingualMarkdown(`⚠️ 模式切换失败：${message}`, `⚠️ Mode switch failed: ${message}`),
+      };
+    }
   }
 
   private async handleAliasAction(input: SessionProjectionActionInput): Promise<SessionProjectionActionResult> {
@@ -464,6 +790,53 @@ export class SessionProjectionController {
     const mode = entry?.chatMode ?? (input.threadId ? 'topic' : 'group');
     try {
       this.requireAuthorized(requestedScope, input.chatId, mode, input.operatorId);
+      if (action === 'use-cancel') {
+        return {
+          toast: { type: 'info', content: '已取消 / Cancelled' },
+          settle: bilingualMarkdown('已取消，绑定未改变。', 'Cancelled; the binding is unchanged.'),
+        };
+      }
+      if (action === 'use-pick') {
+        // A pick from the ambiguity card only opens the ordinary confirmation;
+        // the binding still needs the nonce-protected `/use` confirm, so a
+        // mis-tap cannot rebind the chat by itself.
+        const picked = typeof input.value.sessionId === 'string' ? input.value.sessionId : '';
+        if (!picked) throw new Error('the picked candidate carries no session id');
+        const pickedLabel = typeof input.value.label === 'string' && input.value.label !== ''
+          ? input.value.label
+          : picked;
+        // The confirmation resumes the session and reads its log, which can
+        // outlast the card callback's deadline — answering the callback that
+        // late shows the operator 目标回调服务超时未响应 for work that in fact
+        // succeeded. So the picker settles now and the confirmation card is
+        // opened behind it, with a failure reported into the chat rather than
+        // into a callback nobody is listening to any more.
+        void this.prepareConfirmation({
+          sessionId: picked,
+          identity: { scope: requestedScope, workspaceCwd, actorId: cardActor },
+          chatId: input.chatId,
+          ...(input.threadId ? { threadId: input.threadId } : {}),
+        }).catch(async (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          try {
+            await this.deps.channel.sendMarkdown(
+              input.chatId,
+              bilingualMarkdown(
+                `⚠️ 打开确认卡失败：${message}`,
+                `⚠️ Could not open the confirmation card: ${message}`,
+              ),
+              this.options(input.threadId),
+            );
+          } catch { /* the chat already saw the failure as a toast */ }
+        });
+        return {
+          toast: { type: 'success', content: `已选择 ${pickedLabel} / Selected ${pickedLabel}` },
+          settle: bilingualMarkdown(
+            `✅ 已选择 \`${pickedLabel}\`，确认卡随后弹出。`,
+            `✅ Selected \`${pickedLabel}\`; the confirmation card follows.`,
+          ),
+        };
+      }
       const nonce = typeof input.value.nonce === 'string' ? input.value.nonce : '';
       const pending = this.pendingDeletions.get(nonce);
       if (!pending || pending.expiresAt <= Date.now() || pending.alias !== alias ||
@@ -520,6 +893,38 @@ export class SessionProjectionController {
         settle: bilingualMarkdown(`⚠️ 操作失败：${message}`, `⚠️ Failed: ${message}`),
       };
     }
+  }
+
+  private async attachSession(input: {
+    scope: string;
+    workspaceCwd: string;
+    chatId: string;
+    threadId?: string;
+    sessionId: string;
+    connectionMode: FeishuConnectionMode;
+  }) {
+    const current = this.deps.store.get(input.scope, input.workspaceCwd);
+    if (current?.sessionId === input.sessionId) return current;
+    const owner = this.deps.store.ownerOf(input.sessionId);
+    if (owner && (owner.scope !== input.scope || owner.workspaceCwd !== input.workspaceCwd)) {
+      throw new Error('该 session 已连接到另一个飞书聊天；请先在原聊天 /detach，或由管理员使用 /use 迁移');
+    }
+    const prepared = await this.deps.bridge.prepare(input.sessionId, input.workspaceCwd);
+    const result = await this.deps.bridge.bindConfirmed({
+      scope: input.scope,
+      workspaceCwd: input.workspaceCwd,
+      chatId: input.chatId,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      prepared,
+      deliverHistory: false,
+      connectionMode: input.connectionMode,
+      ...(owner ? { expectedOwner: { scope: owner.scope, workspaceCwd: owner.workspaceCwd } } : {}),
+      onBindingCommitted: () => {
+        this.deps.sessions.clearSessionElsewhere(input.sessionId, input.scope, input.workspaceCwd);
+        this.deps.sessions.set(input.scope, input.sessionId, input.workspaceCwd);
+      },
+    });
+    return result.binding;
   }
 
 
@@ -659,6 +1064,12 @@ export class SessionProjectionController {
       if (pending.expiresAt <= now) {
         clearTimeout(pending.timer);
         this.pendingRenames.delete(nonce);
+      }
+    }
+    for (const [nonce, pending] of this.pendingConnectionModes) {
+      if (pending.expiresAt <= now) {
+        clearTimeout(pending.timer);
+        this.pendingConnectionModes.delete(nonce);
       }
     }
   }

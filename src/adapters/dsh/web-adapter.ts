@@ -231,7 +231,7 @@ function createWebRun(adapter: WebDshAdapter, options: WebRunOptions): WebRunHan
  * (`session.create` / `session.prompt`) and its WebSocket event stream
  * (`/api/events.mux`). The web agent is the single writer of every session
  * log, which removes the multi-writer corruption (double-write) that any
- * second agent runtime (SDK subprocess, guardian relaunch, stale live
+ * second agent runtime (SDK subprocess or stale live
  * session) can cause, and gives cross-instance history continuation for free.
  */
 export class WebDshAdapter implements AgentAdapter {

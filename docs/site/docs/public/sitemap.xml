@@ -1,50 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://dsh-lark-bot.arr2018.dpdns.org/</loc>
-    <lastmod>2026-08-25</lastmod>
+    <loc>https://jason-namehard.github.io/dsh-feishu-session-control/</loc>
+    <lastmod>2026-09-09</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://dsh-lark-bot.arr2018.dpdns.org/guide/quickstart</loc>
-    <lastmod>2026-08-25</lastmod>
+    <loc>https://jason-namehard.github.io/dsh-feishu-session-control/guide/quickstart</loc>
+    <lastmod>2026-09-09</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://dsh-lark-bot.arr2018.dpdns.org/guide/features</loc>
-    <lastmod>2026-08-25</lastmod>
+    <loc>https://jason-namehard.github.io/dsh-feishu-session-control/guide/features</loc>
+    <lastmod>2026-09-09</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://dsh-lark-bot.arr2018.dpdns.org/guide/commands</loc>
-    <lastmod>2026-08-25</lastmod>
+    <loc>https://jason-namehard.github.io/dsh-feishu-session-control/guide/commands</loc>
+    <lastmod>2026-09-09</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://dsh-lark-bot.arr2018.dpdns.org/guide/notification-sinks</loc>
-    <lastmod>2026-08-25</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://dsh-lark-bot.arr2018.dpdns.org/guide/configuration</loc>
-    <lastmod>2026-08-25</lastmod>
+    <loc>https://jason-namehard.github.io/dsh-feishu-session-control/guide/configuration</loc>
+    <lastmod>2026-09-09</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://dsh-lark-bot.arr2018.dpdns.org/guide/security</loc>
-    <lastmod>2026-08-25</lastmod>
+    <loc>https://jason-namehard.github.io/dsh-feishu-session-control/guide/security</loc>
+    <lastmod>2026-09-09</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://dsh-lark-bot.arr2018.dpdns.org/guide/troubleshooting</loc>
-    <lastmod>2026-08-25</lastmod>
+    <loc>https://jason-namehard.github.io/dsh-feishu-session-control/guide/troubleshooting</loc>
+    <lastmod>2026-09-09</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>

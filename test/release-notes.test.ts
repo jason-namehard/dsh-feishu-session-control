@@ -4,7 +4,7 @@ import { buildReleaseNotes } from '../scripts/release-notes.mjs';
 describe('buildReleaseNotes', () => {
   it('groups conventional commits by type and links the changelog', () => {
     const commits = [
-      'fix(guardian): make the run watchdog an idle timeout',
+      'fix(runtime): make the run watchdog an idle timeout',
       'feat(cards): show elapsed state on run cards',
       'docs: align every doc with the current implementation',
       'release: v0.10.1',
@@ -21,7 +21,7 @@ describe('buildReleaseNotes', () => {
     expect(body).toContain('### Other');
     expect(body).toContain('- an ungrouped commit');
     expect(body).toContain(
-      'https://github.com/PlutoKeating/dsh-lark-bot/compare/v0.10.0...v0.10.1',
+      'https://github.com/jason-namehard/dsh-feishu-session-control/compare/v0.10.0...v0.10.1',
     );
   });
 

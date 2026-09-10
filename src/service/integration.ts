@@ -10,7 +10,7 @@ export interface ManagedServiceRestartResult {
   suppressed?: boolean;
 }
 
-/** Prefer the installed OS service so guardian/upgrade never double-launch dsh. */
+/** Prefer the installed OS service so upgrade never double-launches dsh. */
 export async function restartInstalledProfileService(
   profile: string,
   options: {

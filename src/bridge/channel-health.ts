@@ -7,7 +7,7 @@ import type { LarkChannel, WSConnectionState, WSConnectionStatus } from '@larksu
  * socket stays `ESTABLISHED` and the bridge engine keeps writing a fresh
  * heartbeat, but Feishu stops delivering inbound events. The engine's own
  * heartbeat only proves the *process* is alive, so `service status`, `doctor`
- * and the guardian all kept reporting healthy while messages were silently
+ * and process health checks all kept reporting healthy while messages were silently
  * lost.
  *
  * This monitor reads the SDK's connection-state snapshot (`getConnectionStatus`)

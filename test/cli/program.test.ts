@@ -11,7 +11,8 @@ describe('buildProgram', () => {
 
     expect(program.name()).toBe('dsh-lark-bot');
     const names = program.commands.map((command) => command.name());
-    expect(names).toEqual(expect.arrayContaining(['setup', 'upgrade', 'doctor', 'guardian', 'bot']));
+    expect(names).toEqual(expect.arrayContaining(['setup', 'upgrade', 'doctor', 'bot']));
+    expect(names).not.toContain('guardian');
   });
 
   it('keeps the internal run command hidden from help', () => {
@@ -20,13 +21,11 @@ describe('buildProgram', () => {
     expect((run as unknown as { _hidden: boolean })._hidden).toBe(true);
   });
 
-  it('registers guardian subcommands', () => {
+  it('accepts an explicit local package for setup', () => {
     const program = buildProgram();
-    const guardian = program.commands.find((command) => command.name() === 'guardian');
-    const subcommands = guardian?.commands.map((command) => command.name()) ?? [];
-    expect(subcommands).toEqual(
-      expect.arrayContaining(['run', 'install', 'uninstall', 'status']),
-    );
+    const setup = program.commands.find((command) => command.name() === 'setup');
+
+    expect(setup?.options.map((option) => option.long)).toContain('--package');
   });
 
   it('registers multi-bot lifecycle subcommands', () => {

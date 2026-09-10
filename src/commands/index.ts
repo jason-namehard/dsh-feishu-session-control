@@ -5,7 +5,6 @@ import { join, resolve } from 'node:path';
 import type { ActiveRuns } from '../bot/active-runs.js';
 import type { ApprovalRegistry } from '../bot/approvals.js';
 import type { DensityStore } from '../bot/density-store.js';
-import type { PermissionPolicy, PermissionPolicyStore } from '../bot/permission-policy-store.js';
 import type {
   NotificationPreference,
   NotificationPreferenceStore,
@@ -130,7 +129,6 @@ export interface CommandContext {
   questions: QuestionRegistry | undefined;
   plans?: PlanApprovalRegistry;
   densityStore: DensityStore | undefined;
-  permissionPolicies?: PermissionPolicyStore;
   notificationPreferences?: NotificationPreferenceStore;
   defaultNotificationPreference?: NotificationPreference;
   notificationChannels?: NotificationChannelStore;
@@ -204,13 +202,14 @@ const HELP = [
   '- `/resume` — 查看当前会话最近上下文',
   '- `/sessions` — 列出 DSH 会话与固定别名',
   '- `/use <MMDD-N>` — 确认后切换到指定会话（不回填历史）',
+  '- `/switch` — 在半衔接与完整衔接之间切换',
+  '- `/detach` — 断开当前飞书聊天与 DSH 会话的连接',
   '- `/delete <MMDD-N>` — 确认后将会话移入回收站',
   '- `/purge <MMDD-N>` — 确认后永久删除会话',
   '- `/rename <MMDD-N> [名称]` — 给会话命名，网页端同步显示；不带名称会弹出命名卡片',
   '- `/stop` — 终止当前任务',
   '- `/timeout [N|off|default]` — 查看或设置当前会话空闲超时（持续无活动事件 N 分钟才终止）',
   '- `/concurrency [N|default]` — 查看或设置当前 scope 的并行任务数',
-  '- `/permission [ask|allow|deny] [scope]` — 查看或设置工具权限策略（管理员可指定当前聊天内 scope）',
   '- `/isolation [group|topic|member]` — 查看或设置本群会话隔离模式（设置仅管理员）',
   '- `/role list|show <id>|set <id>|clear` — 查看 / 绑定角色',
   '- `/role save <id> <name> [--persona 文案] [--model <id>] [--tools <csv>] [--rules 文案]` — 创建/更新角色（管理员）',
@@ -253,13 +252,14 @@ const HELP_EN = [
   '- `/resume` — show recent context for this session',
   '- `/sessions` — list DSH sessions and stable aliases',
   '- `/use <MMDD-N>` — switch to a named DSH session after confirmation',
+  '- `/switch` — choose half or full Feishu connection mode',
+  '- `/detach` — detach this Feishu chat without deleting the DSH session',
   '- `/delete <MMDD-N>` — move a named DSH session to the recycle bin after confirmation',
   '- `/purge <MMDD-N>` — permanently delete a named DSH session after confirmation',
   '- `/rename <MMDD-N> [name]` — name a DSH session; the Web UI shows the same name',
   '- `/stop` — stop current tasks',
   '- `/timeout [N|off|default]` — view or set the idle timeout',
   '- `/concurrency [N|default]` — view or set parallel runs for this scope',
-  '- `/permission [ask|allow|deny] [scope]` — view or set tool permission policy (admin; optional same-chat scope)',
   '- `/isolation [group|topic|member]` — view or set group isolation (admin to set)',
   '- `/role list|show <id>|set <id>|clear` — view or bind roles',
   '- `/role save <id> <name> [--persona text] [--model <id>] [--tools <csv>] [--rules text]` — create/update a role (admin)',
@@ -566,7 +566,6 @@ export type StatusContext = Pick<
   | 'approvals'
   | 'questions'
   | 'plans'
-  | 'permissionPolicies'
   | 'notificationPreferences'
   | 'defaultNotificationPreference'
   | 'notificationSinks'
@@ -637,7 +636,7 @@ export async function statusCardInputFor(
     activeRunIds: active.map((run) => run.runId),
     version: currentVersion(),
     isolation: ctx.chatMode === 'p2p' ? 'p2p' : (ctx.isolationMode ?? 'topic'),
-    permissionPolicy: ctx.permissionPolicies?.get(ctx.scope) ?? 'ask',
+    permissionPolicy: 'DSH native approval',
     executionMode: ctx.executionModes?.get(ctx.scope) ?? 'balanced',
     ...(notificationPreference ? { notificationPreference } : {}),
     ...(ctx.notificationSinks ? { notificationChannels: ctx.notificationSinks.enabledChannels().map((channel) => channel.id) } : {}),
@@ -821,6 +820,14 @@ async function handleVersion(_args: string, ctx: CommandContext): Promise<void> 
 
 async function handleUpgrade(_args: string, ctx: CommandContext): Promise<void> {
   if (!requireAdmin(ctx)) return;
+  if (!upgradeCheckEnabled()) {
+    await reply(
+      ctx,
+      '当前 fork 默认关闭 npm 自动更新，避免同名上游包覆盖本项目。请从项目仓库更新源码并重新安装本地 `file:` 依赖；维护者明确配置 `DSH_LARK_UPGRADE_CHECK=1` 后才启用 `/upgrade`。',
+      'Automatic npm updates are disabled by default for this fork so the same-named upstream package cannot replace it. Update the checkout and reinstall the local `file:` dependency; `/upgrade` is enabled only when the maintainer explicitly sets `DSH_LARK_UPGRADE_CHECK=1`.',
+    );
+    return;
+  }
   if (!ctx.senderId || !ctx.channelUpdates) {
     await reply(ctx, '当前运行方式不支持飞书内更新。', 'In-chat updates are unavailable in this runtime.');
     return;
@@ -1100,48 +1107,6 @@ async function handleConcurrency(args: string, ctx: CommandContext): Promise<voi
 
   ctx.concurrencyStore.set(ctx.scope, n);
   await reply(ctx, `已设置当前 scope 的并行任务数：**${String(n)}**。`, `Set parallel tasks for this scope to **${String(n)}**.`);
-}
-
-async function handlePermission(args: string, ctx: CommandContext): Promise<void> {
-  const [rawPolicy = '', rawTarget = '', ...extra] = args.trim().split(/\s+/);
-  const input = rawPolicy.toLowerCase();
-  const labels: Record<PermissionPolicy, { zh: string; en: string }> = {
-    ask: { zh: '每次询问', en: 'ask every time' },
-    allow: { zh: '自动放行', en: 'auto-allow' },
-    deny: { zh: '直接拒绝', en: 'always deny' },
-  };
-  if (!input) {
-    const current = ctx.permissionPolicies?.get(ctx.scope) ?? 'ask';
-    await reply(
-      ctx,
-      `当前 scope 的工具权限策略：**${labels[current].zh}**（\`${current}\`）。可用 \`/permission ask|allow|deny\` 调整（仅管理员）。`,
-      `Tool permission policy for this scope: **${labels[current].en}** (\`${current}\`). Use \`/permission ask|allow|deny\` to change it (admin only).`,
-    );
-    return;
-  }
-  if ((input !== 'ask' && input !== 'allow' && input !== 'deny') || extra.length > 0) {
-    await reply(ctx, '用法：`/permission [ask|allow|deny] [scope]`', 'Usage: `/permission [ask|allow|deny] [scope]`');
-    return;
-  }
-  if (!requireAdmin(ctx)) return;
-  if (!ctx.permissionPolicies) {
-    await reply(ctx, '当前运行环境未启用工具权限策略存储。', 'Tool permission policy storage is not enabled in this runtime.');
-    return;
-  }
-  const targetScope = rawTarget || ctx.scope;
-  if (
-    targetScope !== ctx.chatId &&
-    !targetScope.startsWith(`${ctx.chatId}:`)
-  ) {
-    await reply(ctx, '只能修改当前聊天内的 scope。请从目标会话 `/status` 复制完整 scope。', 'You can only modify a scope in the current chat. Copy the full scope from the target session’s `/status`.');
-    return;
-  }
-  await ctx.permissionPolicies.set(targetScope, input);
-  await reply(
-    ctx,
-    `已将 scope \`${targetScope}\` 的工具权限策略设为 **${labels[input].zh}**（\`${input}\`），从下一次工具审批起生效。计划审批仍会照常执行。`,
-    `Set scope \`${targetScope}\`'s tool permission policy to **${labels[input].en}** (\`${input}\`). It applies to the next tool approval; plan approval remains enforced.`,
-  );
 }
 
 async function handleDensity(args: string, ctx: CommandContext): Promise<void> {
@@ -1482,6 +1447,22 @@ async function handleRename(args: string, ctx: CommandContext): Promise<void> {
   await ctx.sessionProjection.handleRenameCommand(args, ctx);
 }
 
+async function handleSessionConnection(
+  command: 'switch' | 'detach',
+  args: string,
+  ctx: CommandContext,
+): Promise<void> {
+  if (!ctx.sessionProjection) {
+    await reply(
+      ctx,
+      '当前 adapter 未提供飞书会话连接管理；请使用 `web` adapter 并确认 Web host 可用。',
+      'The current adapter does not provide Feishu session attachment management; use the `web` adapter and ensure the Web host is reachable.',
+    );
+    return;
+  }
+  await ctx.sessionProjection.handleConnectionCommand(command, args, ctx);
+}
+
 const handlers: Record<string, Handler> = {
   '/new': handleNew,
   '/reset': handleNew,
@@ -1496,13 +1477,14 @@ const handlers: Record<string, Handler> = {
   '/resume': handleResume,
   '/sessions': (args, ctx) => handleSessionAliases('sessions', args, ctx),
   '/use': (args, ctx) => handleSessionAliases('use', args, ctx),
+  '/switch': (args, ctx) => handleSessionConnection('switch', args, ctx),
+  '/detach': (args, ctx) => handleSessionConnection('detach', args, ctx),
   '/delete': (args, ctx) => handleSessionAliases('delete', args, ctx),
   '/purge': (args, ctx) => handleSessionAliases('purge', args, ctx),
   '/rename': handleRename,
   '/stop': handleStop,
   '/timeout': handleTimeout,
   '/concurrency': handleConcurrency,
-  '/permission': handlePermission,
   '/isolation': handleIsolation,
   '/mention': handleMention,
   '/role': handleRole,

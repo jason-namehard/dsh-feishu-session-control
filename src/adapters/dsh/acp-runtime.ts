@@ -149,9 +149,7 @@ export function acpPatchYaml(
       `      name: '${own.name}/plan'`,
       '      config:',
       '        endpoint: !!js process.env.DSH_LARK_PLAN_URL',
-      '        policyEndpoint: !!js process.env.DSH_LARK_APPROVAL_URL',
       '        token: !!js process.env.DSH_LARK_NOTIFY_TOKEN',
-      '        mode: !!js process.env.DSH_LARK_PLAN_GATE',
       '',
     );
   }
@@ -213,9 +211,12 @@ function ownPackageLinked(profileRoot: string, own: OwnPackageInfo): boolean {
 
 function runPnpmInstall(profileRoot: string, options: { force?: boolean } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('pnpm', ['install', ...(options.force ? ['--force'] : [])], {
+    const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+    const child = spawn(command, ['install', ...(options.force ? ['--force'] : [])], {
       cwd: profileRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+      windowsHide: true,
     });
     let output = '';
     child.stdout.on('data', (chunk: Buffer) => {
@@ -233,7 +234,7 @@ function runPnpmInstall(profileRoot: string, options: { force?: boolean } = {}):
         return;
       }
       const tail = output.trim().split('\n').slice(-8).join('\n');
-      reject(new Error(`pnpm install exited with code ${String(code)}\n${tail}`));
+      reject(new Error(`${command} install exited with code ${String(code)}\n${tail}`));
     });
   });
 }

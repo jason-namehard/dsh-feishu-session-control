@@ -78,7 +78,7 @@ export function buildReleaseNotes(commits, from, to, highlights = '') {
   }
   if (from && to) {
     lines.push(
-      `**Full Changelog**: https://github.com/PlutoKeating/dsh-lark-bot/compare/${from}...${to}`,
+      `**Full Changelog**: https://github.com/jason-namehard/dsh-feishu-session-control/compare/${from}...${to}`,
     );
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';

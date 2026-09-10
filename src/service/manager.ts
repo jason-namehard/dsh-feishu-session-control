@@ -5,8 +5,8 @@ import type { AppPaths } from '../config/app-paths.js';
 import { resolveAppPaths } from '../config/app-paths.js';
 import { discoverDshBin, resolveDshHome } from '../config/dsh-runtime.js';
 import { DshProviderManager } from '../config/dsh-config.js';
-import { resolveGuardianCliEntry } from '../guardian/install.js';
 import { writeFileAtomic } from '../platform/atomic-write.js';
+import { findProfileProcess, type ProfileProcess } from '../platform/process.js';
 import { resolveCliJsPath, serviceNameFor, launchdLabelFor } from './command.js';
 import {
   readServiceEnv,
@@ -24,12 +24,6 @@ import type {
   ServiceSpec,
   ServiceStatus,
 } from './types.js';
-import {
-  findProfileProcess,
-  listProcesses,
-  matchGuardianProcess,
-  type ProfileProcess,
-} from '../guardian/process.js';
 
 function isPidAlive(pid: number): boolean {
   try {
@@ -179,46 +173,9 @@ export class ServiceManager {
     if (serviceStatus.state === 'running') return;
     const process = await this.findProcess(this.profile);
     if (process) {
-      // The guardian auto-relaunches the profile when dsh is down, so the
-      // process has no owning terminal for the user to stop. On install/start
-      // take over instead of deadlocking on the "stop it in the original
-      // terminal" error (issue #112 Bug D): stop it and let the managed service
-      // begin; the fresh engine heartbeat keeps the guardian in standby.
-      if (await this.isGuardianSpawned(process)) {
-        await this.stopGuardianSpawnedProcess(process.pid);
-        return;
-      }
       throw new Error(
         `检测到未受管的 dsh --profile ${this.profile}（pid ${process.pid}）。请先在原终端停止它，再重试。`,
       );
-    }
-  }
-
-  /** True when the profile process was spawned by the resident guardian. */
-  private async isGuardianSpawned(process: ProfileProcess): Promise<boolean> {
-    const ppid = process.ppid;
-    if (!ppid) return false;
-    const parent = (await listProcesses()).find((entry) => entry.pid === ppid);
-    return parent !== undefined && matchGuardianProcess(parent.cmdline);
-  }
-
-  /** Best-effort stop of a guardian-spawned profile process (grace, then kill). */
-  private async stopGuardianSpawnedProcess(pid: number): Promise<void> {
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {
-      // Already gone; nothing to stop.
-      return;
-    }
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline && isPidAlive(pid)) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (!isPidAlive(pid)) return;
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // Already gone.
     }
   }
 
@@ -260,9 +217,7 @@ export class ServiceManager {
     const serviceName = serviceNameFor(this.profile);
     const serviceEnvFile = this.paths.serviceEnvFile(this.profile);
     const inheritedServiceEnv = await readServiceEnv(serviceEnvFile);
-    const cliJsPath = this.controllerOverride
-      ? resolveCliJsPath()
-      : resolveGuardianCliEntry(this.profile, this.home, this.sourceEnv);
+    const cliJsPath = resolveCliJsPath();
     return {
       serviceName,
       label: launchdLabelFor(this.profile),

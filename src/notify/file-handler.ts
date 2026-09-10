@@ -2,6 +2,7 @@ import type { SessionStore } from '../session/store.js';
 import type { ScopeDirectory } from '../bridge/scope-directory.js';
 import type { SendOptions } from '../bridge/send-options.js';
 import { prepareOutboundFile } from '../media/outbound-files.js';
+import type { CanRouteSessionToFeishu } from './can-route.js';
 
 export interface FilePayload {
   token: string;
@@ -20,6 +21,7 @@ export interface FileResult {
 
 export interface FileHandlerDeps {
   sessions: SessionStore;
+  canRouteSessionToFeishu?: CanRouteSessionToFeishu;
   scopeDirectory: ScopeDirectory;
   allowedRoots: (
     sessionId: string,
@@ -34,6 +36,10 @@ export interface FileHandlerDeps {
 
 export function buildFileHandler(deps: FileHandlerDeps): (payload: FilePayload) => Promise<FileResult> {
   return async (payload) => {
+    const canRoute = deps.canRouteSessionToFeishu;
+    if (canRoute !== undefined && (await canRoute(payload.sessionId)) === false) {
+      return { ok: false, error: `session is not currently connected to Feishu: ${payload.sessionId}` };
+    }
     const scope = deps.sessions.scopeForSession(payload.sessionId);
     const workspace = deps.sessions.workspaceForSession(payload.sessionId);
     if (!scope || !workspace) return { ok: false, error: `unknown session: ${payload.sessionId}` };

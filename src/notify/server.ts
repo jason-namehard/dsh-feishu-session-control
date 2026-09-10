@@ -6,11 +6,14 @@ import type { MentionTarget } from '../bridge/types.js';
 import type { AskPayload, AskResult } from './ask-handler.js';
 import type { PlanPayload, PlanResult } from './plan-handler.js';
 import type { ApprovalPayload, ApprovalResult } from './approval-handler.js';
+import type { CanRouteSessionToFeishu } from './can-route.js';
 import type { FilePayload, FileResult } from './file-handler.js';
 import type { SecretPayload, SecretResult } from './secret-handler.js';
 
 export interface NotifyMessage {
   token: string;
+  /** Native DSH session requesting the outbound message. */
+  sessionId?: string;
   /** Scope key (chat id or `chat:thread`); resolved via the scope directory. */
   scope?: string;
   /** Direct chat id fallback when scope is unknown. */
@@ -30,13 +33,19 @@ export interface NotifyServerDeps {
   port?: number;
   /** Test override for the JSON-whitespace heartbeat used by human waits. */
   longPollHeartbeatMs?: number;
-  /** Resolve a scope/chat target to a concrete chat destination. */
-  resolve: (message: NotifyMessage) => NotifyDestination | undefined;
+  /**
+   * Resolve a scope/chat target to a concrete chat destination. Asynchronous
+   * because a request carrying only `sessionId` — `lark_notify`'s documented
+   * "send to the current chat" default — resolves its scope through the
+   * session's delegation ancestor.
+   */
+  resolve: (message: NotifyMessage) => NotifyDestination | undefined | Promise<NotifyDestination | undefined>;
   /** Send the outbound message (mentions supported). */
   send: (
     destination: NotifyDestination,
     payload: { text: string; mentions?: MentionTarget[] },
   ) => Promise<void>;
+  canRouteSessionToFeishu?: CanRouteSessionToFeishu;
   /** Optional handler for the `lark_ask_user` question-card channel. */
   ask?: (payload: AskPayload, signal?: AbortSignal) => Promise<AskResult>;
   /** Optional handler for the `lark_request_plan_approval` channel. */
@@ -228,31 +237,22 @@ export class NotifyServer {
           respond(400, { ok: false, error: 'sessionId and toolName are required' });
           return;
         }
-        if (payload.policyCheckOnly) {
-          const result: ApprovalResult = await this.deps.approval(payload);
-          if (!result.ok || !isPermissionPolicy(result.policy)) {
-            respond(404, {
-              ok: false,
-              ...(result.error ? { error: result.error } : { error: 'invalid policy response' }),
-            });
-            return;
-          }
-          respond(200, {
-            ok: true,
-            policy: result.policy,
-            ...(result.denial === undefined ? {} : { denial: result.denial }),
-          });
-          return;
-        }
         const result: ApprovalResult = await waitForHuman((signal) =>
           this.deps.approval!(payload, signal)
         );
         if (!result.ok || !result.outcome) {
-          respond(404, { ok: false, ...(result.error ? { error: result.error } : {}) });
+          respond(404, {
+            ok: false,
+            // Forwarded even here: an owned request whose card is already gone
+            // must not fall through to a desktop prompt that nothing can close.
+            ...(result.owned === true ? { owned: true } : {}),
+            ...(result.error ? { error: result.error } : {}),
+          });
           return;
         }
         respond(200, {
           ok: true,
+          ...(result.owned === true ? { owned: true } : {}),
           outcome: result.outcome,
           ...(result.denial === undefined ? {} : { denial: result.denial }),
         });
@@ -308,9 +308,17 @@ export class NotifyServer {
         respond(400, { ok: false, error: 'text is required' });
         return;
       }
-      const destination = this.deps.resolve(message);
+      if (this.deps.canRouteSessionToFeishu &&
+          (!message.sessionId || !(await this.deps.canRouteSessionToFeishu(message.sessionId)))) {
+        respond(404, { ok: false, error: 'session is not currently connected to Feishu' });
+        return;
+      }
+      const destination = await this.deps.resolve(message);
       if (!destination) {
-        respond(404, { ok: false, error: `unknown scope/chat: ${message.scope ?? message.chatId ?? ''}` });
+        respond(404, {
+          ok: false,
+          error: `unknown scope/chat: ${message.scope ?? message.chatId ?? message.sessionId ?? ''}`,
+        });
         return;
       }
       await this.deps.send(destination, {
@@ -323,10 +331,6 @@ export class NotifyServer {
       respond(500, { ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   }
-}
-
-function isPermissionPolicy(value: unknown): value is 'ask' | 'allow' | 'deny' {
-  return value === 'ask' || value === 'allow' || value === 'deny';
 }
 
 function readBody(req: IncomingMessage): Promise<string> {

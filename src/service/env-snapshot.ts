@@ -13,9 +13,9 @@ const INTERNAL_KEYS = new Set([
   'DSH_LARK_FILE_URL',
   'DSH_LARK_SECRET_URL',
   'DSH_LARK_NOTIFY_TOKEN',
-  'DSH_LARK_UPDATE_WORKER',
   'DSH_LARK_LIVE_CHANNEL_UPGRADE',
   'DSH_LARK_LIVE_UPGRADE_PROFILE',
+  'DSH_LARK_UPDATE_WORKER',
   'DSH_LARK_E2E',
   'DSH_LARK_E2E_HOME',
 ]);
@@ -26,14 +26,10 @@ export function snapshotServiceEnv(
   inherited: NodeJS.ProcessEnv = {},
 ): Record<string, string> {
   const env: Record<string, string> = {};
-  const updateWorker = source.DSH_LARK_UPDATE_WORKER === '1';
   for (const candidate of [inherited, source]) {
     for (const [key, value] of Object.entries(candidate)) {
       if (value === undefined) continue;
       if (INTERNAL_KEYS.has(key)) continue;
-      // npx prepends its private cache/cwd bins to PATH. During an in-channel
-      // update, retain the previously installed service PATH instead.
-      if (key === 'PATH' && candidate === source && updateWorker && inherited.PATH) continue;
       if (
         key.startsWith('DSH_LARK_') ||
         (EXTRA_KEYS as readonly string[]).includes(key) ||
@@ -45,9 +41,7 @@ export function snapshotServiceEnv(
   }
   // PATH came from the invoking shell. npx prepends its private cache bin and
   // npm synthesises cwd-walk bins that pin an ephemeral plugin version into the
-  // managed service, so sanitize it exactly like the guardian unit (issue #111
-  // / #102). Runs after the update-worker special-case above, so the preserved
-  // inherited PATH is also stabilized.
+  // managed service, so sanitize it before persisting.
   if (typeof env.PATH === 'string' && env.PATH.length > 0) {
     env.PATH = sanitizeServicePath(process.execPath, env.PATH);
   }

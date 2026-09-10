@@ -11,6 +11,7 @@ export async function writeFileAtomic(
   data: string,
   options: AtomicWriteOptions = {},
 ): Promise<void> {
+  if (target === ':memory:') return;
   const directory = dirname(target);
   await mkdir(directory, { recursive: true });
   const temporary = join(directory, `.${randomBytes(8).toString('hex')}.tmp`);

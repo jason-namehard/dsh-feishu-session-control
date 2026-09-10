@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { HostServices, HostSessionEvent } from '../adapters/dsh/host-services.js';
+import {
+  isSubagentSessionHeader,
+  type HostServices,
+  type HostSessionEvent,
+} from '../adapters/dsh/host-services.js';
 import { log } from '../core/logger.js';
 import type {
   DshHistoryPage,
@@ -91,11 +95,16 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
    * chat by exact cwd; the persistence headers alone do not always have one,
    * and a session with no cwd silently becomes unselectable, which is how
    * /use, /delete and /purge all came to fail.
+   *
+   * The route carries no delegation metadata, so subagent sessions — which it
+   * does list — are removed here by joining against the persisted headers. See
+   * {@link HostSessionProjectionSource.subagentSessionIds}.
    */
   async listSessions(): Promise<DshSessionSummary[]> {
-    const [items, trashed] = await Promise.all([
+    const [items, trashed, subagents] = await Promise.all([
       this.fetchSessionItems(),
       this.listTrashedSessionIds(),
+      this.subagentSessionIds(),
     ]);
     const live = this.services.liveSessionIds();
     return items
@@ -122,7 +131,34 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
         return summary;
       })
       .filter((summary): summary is DshSessionSummary => summary !== undefined)
+      // A delegated child session is dsh's own worker, not a conversation: it
+      // must never appear in `/sessions`, never be selectable through `/use`,
+      // and never take an alias.
+      .filter((summary) => !subagents.has(summary.sessionId))
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /**
+   * Ids dsh marks as subagent sessions.
+   *
+   * The listing route this class reads is the source of names and workspace
+   * paths, but it has no delegation metadata; that lives only in the persisted
+   * session header. Reading it is what stops an ephemeral child from minting an
+   * alias nobody can use — observed as aliases `0910-3` and `0910-4` pointing
+   * at two subagent sessions.
+   *
+   * An unreadable header list yields an empty set, i.e. no filtering: losing
+   * the delegation signal costs accuracy, while dropping every session from a
+   * listing whose persistence was momentarily unavailable would cost the whole
+   * list.
+   */
+  private async subagentSessionIds(): Promise<Set<string>> {
+    const headers = await this.services.sessionHeaders();
+    const ids = new Set<string>();
+    for (const header of headers) {
+      if (isSubagentSessionHeader(header)) ids.add(header.id);
+    }
+    return ids;
   }
 
   private async fetchSessionItems(): Promise<Array<Record<string, unknown>>> {

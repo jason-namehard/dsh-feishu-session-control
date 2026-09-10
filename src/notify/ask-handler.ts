@@ -4,6 +4,7 @@ import type { QuestionRegistry } from '../bot/questions.js';
 import type { SessionStore } from '../session/store.js';
 import type { ScopeDirectory } from '../bridge/scope-directory.js';
 import type { SendOptions } from '../bridge/send-options.js';
+import type { CanRouteSessionToFeishu } from './can-route.js';
 
 export interface AskPayload {
   token: string;
@@ -22,6 +23,7 @@ export interface AskResult {
 
 export interface AskHandlerDeps {
   sessions: SessionStore;
+  canRouteSessionToFeishu?: CanRouteSessionToFeishu;
   scopeDirectory: ScopeDirectory;
   questions: QuestionRegistry;
   channel: {
@@ -39,6 +41,12 @@ export function buildAskHandler(
   deps: AskHandlerDeps,
 ): (payload: AskPayload, signal?: AbortSignal) => Promise<AskResult> {
   return async (payload, signal) => {
+    // Guarded rather than optional-called: awaiting an absent predicate would
+    // still yield a microtask, and the card path is synchronously observable.
+    const canRoute = deps.canRouteSessionToFeishu;
+    if (canRoute !== undefined && (await canRoute(payload.sessionId)) === false) {
+      return { ok: false, error: `session is not currently connected to Feishu: ${payload.sessionId}` };
+    }
     const scope = deps.sessions.scopeForSession(payload.sessionId);
     if (!scope) {
       return { ok: false, error: `unknown session: ${payload.sessionId}` };

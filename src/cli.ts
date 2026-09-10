@@ -5,17 +5,10 @@ import { runDoctor } from './cli/commands/doctor.js';
 import { runBot } from './cli/commands/run.js';
 import { runSetup } from './cli/commands/setup.js';
 import { runUpgrade } from './cli/commands/upgrade.js';
-import {
-  installGuardianCommand,
-  runGuardian,
-  statusGuardianCommand,
-  uninstallGuardianCommand,
-} from './cli/commands/guardian.js';
 import { runServiceCommand } from './cli/commands/service.js';
 import { runSupervise } from './cli/commands/supervise.js';
 import { runServiceRuntime } from './cli/commands/service-run.js';
 import { runBotCommand, type BotCommandOptions } from './cli/commands/bot.js';
-import { runGuardianUpdateWorker } from './guardian/update-handoff.js';
 
 function packageVersion(): string {
   const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
@@ -55,14 +48,13 @@ export function buildProgram(): Command {
     )
     .option('--profile <name>', 'dsh profile to install into (default: dsh-lark)')
     .option('--web-profile <name>', 'dsh Web profile for integrated session management (default: web)')
+    .option('--package <spec>', 'explicit package, tarball, or file: spec to install')
     .option('--no-web', 'skip installing the integrated session-management Web profile')
-    .option('--guardian', 'install the safety-net guardian service (installed by default; compatibility)')
-    .option('--no-guardian', 'skip installing the safety-net guardian service (installed by default)')
-    .action(async (opts: { profile?: string; webProfile?: string; web?: boolean; guardian?: boolean }) => {
+    .action(async (opts: { profile?: string; webProfile?: string; package?: string; web?: boolean }) => {
       await runSetup({
         ...(opts.profile ? { profile: opts.profile } : {}),
         ...(opts.web === false ? { webProfile: false as const } : opts.webProfile ? { webProfile: opts.webProfile } : {}),
-        guardian: opts.guardian !== false,
+        ...(opts.package ? { packageSpec: opts.package } : {}),
       });
     });
 
@@ -81,13 +73,12 @@ export function buildProgram(): Command {
   program
     .command('upgrade')
     .description(
-      'One-command full upgrade: package + guardian + runtime profiles, running-instance safe (issue #10)',
+      'One-command full upgrade: package + runtime profiles, running-instance safe',
     )
     .option('--profile <name>', 'dsh profile to upgrade (default: dsh-lark)')
     .option('--check', 'report installed vs latest versions and running state without changing anything')
     .option('-y, --yes', 'skip the interactive confirmation')
-    .option('--no-guardian', 'do not install / upgrade the safety-net guardian')
-    .option('--restart', 'restart the guardian service and (managed) dsh profile after upgrading')
+    .option('--restart', 'restart the managed/detached dsh profile after upgrading')
     .option('--rollback', 'reinstall the previously recorded version')
     .option('--force', 'proceed with the running package version when npm latest is unreachable')
     .option('--package <spec>', 'explicit name@version spec (advanced)')
@@ -95,7 +86,6 @@ export function buildProgram(): Command {
       profile?: string;
       check?: boolean;
       yes?: boolean;
-      guardian?: boolean;
       restart?: boolean;
       rollback?: boolean;
       force?: boolean;
@@ -105,7 +95,6 @@ export function buildProgram(): Command {
         ...(opts.profile ? { profile: opts.profile } : {}),
         check: opts.check === true,
         yes: opts.yes === true,
-        guardian: opts.guardian !== false,
         restart: opts.restart === true,
         rollback: opts.rollback === true,
         force: opts.force === true,
@@ -120,46 +109,6 @@ export function buildProgram(): Command {
   ).action(async (opts: StartOptions) => {
     await runBot(opts);
   });
-
-  const guardian = program
-    .command('guardian')
-    .description(
-      'Safety-net guardian: a minimal process independent of dsh that keeps the Feishu rescue entrance alive',
-    );
-
-  guardian
-    .command('run')
-    .description('Run the guardian in the foreground (system service entry point)')
-    .option('--dsh-profile <name>', 'dsh profile to watch / relaunch (default from state)')
-    .option('--bridge-profile <name>', 'bridge state profile with Feishu credentials')
-    .action(async (opts: { dshProfile?: string; bridgeProfile?: string }) => {
-      await runGuardian(opts);
-    });
-
-  guardian
-    .command('install')
-    .description('Install the guardian as a system-level resident service')
-    .option('--dsh-profile <name>', 'dsh profile to watch / relaunch (default: dsh-lark)')
-    .option('--bridge-profile <name>', 'bridge state profile (default: default)')
-    .action(async (opts: { dshProfile?: string; bridgeProfile?: string }) => {
-      await installGuardianCommand(opts);
-    });
-
-  guardian
-    .command('uninstall')
-    .description('Remove the system service entry (state file is kept)')
-    .action(async () => {
-      await uninstallGuardianCommand();
-    });
-
-  guardian
-    .command('status')
-    .description('Show guardian / dsh / safe-mode state')
-    .option('--dsh-profile <name>', 'dsh profile to inspect')
-    .option('--bridge-profile <name>', 'bridge state profile to inspect')
-    .action(async (opts: { dshProfile?: string; bridgeProfile?: string }) => {
-      await statusGuardianCommand(opts);
-    });
 
   const service = program
     .command('service')
@@ -218,15 +167,6 @@ export function buildProgram(): Command {
     .requiredOption('--env-file <path>', 'private service environment snapshot')
     .action(async (opts: { profile?: string; envFile: string }) => {
       await runServiceRuntime(opts);
-    });
-
-  program
-    .command('guardian-update-worker', { hidden: true })
-    .description('Complete an approved in-chat update outside the bridge process')
-    .requiredOption('--state-file <path>', 'durable guardian update state')
-    .requiredOption('--request-id <id>', 'approved update request id')
-    .action(async (opts: { stateFile: string; requestId: string }) => {
-      await runGuardianUpdateWorker({ stateFile: opts.stateFile, id: opts.requestId });
     });
 
   program

@@ -20,7 +20,6 @@ import { RunPolicyStore } from '../../bot/run-policy.js';
 import { IsolationStore } from '../../bot/isolation-store.js';
 import { MentionPolicyStore } from '../../bot/mention-policy-store.js';
 import { PlanApprovalRegistry } from '../../bot/plan-approvals.js';
-import { PermissionPolicyStore } from '../../bot/permission-policy-store.js';
 import {
   NotificationPreferenceStore,
   type NotificationPreference,
@@ -60,10 +59,10 @@ import { HostSessionProjectionSource } from '../../session/host-projection.js';
 import { HostDshAdapter } from '../../adapters/dsh/host-adapter.js';
 import { HostServices } from '../../adapters/dsh/host-services.js';
 import { SessionAliasManager } from '../../session/alias-manager.js';
+import type { SessionProjectionController } from '../../commands/session-projection.js';
 import { archiveScopeSlug, SessionArchive } from '../../session/archive.js';
 import { GitWorktreeManager } from '../../workspace/git-worktree.js';
 import { WorkspaceStore } from '../../workspace/store.js';
-import { startHeartbeat } from '../../guardian/heartbeat.js';
 import { currentVersion } from '../../upgrade/update-check.js';
 import { bilingualMarkdown } from '../../card/i18n.js';
 import { UpdateNotifier } from '../../upgrade/update-notifier.js';
@@ -87,11 +86,9 @@ import { SecretRequestRegistry } from '../../secret/registry.js';
 import { SecretTargetManager } from '../../secret/targets.js';
 import { buildSecretHandler } from '../../notify/secret-handler.js';
 import { ownPackageInfo } from '../../adapters/dsh/own-package.js';
-import {
-  GuardianUpdateHandoff,
-  guardianUpdateFailureHint,
-} from '../../guardian/update-handoff.js';
 import { ChannelUpdateController } from '../../upgrade/channel-update.js';
+import { InProcessChannelUpdater } from '../../upgrade/channel-runner.js';
+import { runUpgrade } from './upgrade.js';
 
 const DEBOUNCE_MS = 600;
 
@@ -199,6 +196,22 @@ function mergeStartEnv(options: StartOptions): NodeJS.ProcessEnv {
 }
 
 /**
+ * How far a subagent's session may be followed up its parent chain while
+ * resolving the session that owns a Feishu decision. Real chains are one or
+ * two deep; the cap only exists so a corrupted header cannot spin.
+ */
+const MAX_ANCESTOR_DEPTH = 16;
+
+/**
+ * The part of a persisted session header this engine reads. `parentSession` is
+ * written for delegations and absent for top-level sessions.
+ */
+interface PersistedParentLink {
+  readonly id: string;
+  readonly parentSession?: unknown;
+}
+
+/**
  * Start the bridge engine. Runs the full Feishu channel pipeline (stores,
  * adapter, card queue, notify server) and returns a handle that can be
  * stopped. No process-level signal handling: the CLI wrapper owns signals,
@@ -211,7 +224,7 @@ export async function startBridgeEngine(
   const paths = resolveAppPaths(env.home);
   const profileName = options.profileName;
   const dshProfileName = process.env.DSH_LARK_DSH_PROFILE ??
-    (profileName === 'default' ? env.guardianProfile : `dsh-lark-${profileName}`);
+    (profileName === 'default' ? 'dsh-lark' : `dsh-lark-${profileName}`);
   const configStore = new ConfigStore(paths.configFile);
   const fleet = new BotFleetStore(paths.fleetFile);
   const handoffGuard = new BotHandoffGuard(paths.handoffFile);
@@ -254,19 +267,12 @@ export async function startBridgeEngine(
     paths.profilePath(profileName, 'mention-policies.json'),
     env.groupNoAt ? 'open' : 'require',
   );
-  const permissionPolicies = new PermissionPolicyStore(paths.permissionPoliciesFile(profileName));
   const notificationPreferences = new NotificationPreferenceStore(paths.notificationPreferencesFile(profileName));
   const notificationChannels = new NotificationChannelStore(paths.notificationChannelsFile(profileName));
   const notificationSinks = new OutboundSinkRegistry(notificationChannels);
   const replyPolicies = new ReplyPolicyStore(paths.replyPoliciesFile(profileName));
   const executionModes = new ExecutionModeStore(paths.executionModesFile(profileName));
   const languagePolicies = new LanguagePolicyStore(paths.languagePoliciesFile(profileName));
-  const updateHandoff = new GuardianUpdateHandoff({
-    file: paths.profilePath(profileName, 'guardian', 'update.json'),
-    packageName: ownPackageInfo().name,
-    dshProfile: dshProfileName,
-  });
-  const channelUpdates = new ChannelUpdateController({ handoff: updateHandoff });
   const worktreeManager = new GitWorktreeManager({
     worktreesRoot: paths.profilePath(profileName, 'worktrees'),
   });
@@ -280,7 +286,6 @@ export async function startBridgeEngine(
     scopeDirectory.load(),
     isolationStore.load(),
     mentionPolicies.load(),
-    permissionPolicies.load(),
     notificationPreferences.load(),
     notificationChannels.load(),
     replyPolicies.load(),
@@ -323,18 +328,6 @@ export async function startBridgeEngine(
       '多机器人实例不能共享 Web adapter 事件流；请将该实例配置为 sdk 或 acp。',
     );
   }
-  if (adapter instanceof WebDshAdapter) {
-    adapter.setPromptObserver(async ({ sessionId, rpcId, origin }) => {
-      const binding = sessionProjections.get(origin.scope, origin.workspaceCwd);
-      if (!binding || binding.sessionId !== sessionId) return;
-      await sessionProjections.recordCorrelation(
-        origin.scope,
-        origin.workspaceCwd,
-        sessionId,
-        { rpcId, feishuMessageId: origin.messageId, createdAt: Date.now() },
-      );
-    });
-  }
   // Which projection source can serve /sessions, /use, /delete and /purge.
   // The in-process adapter reads the host services directly; the HTTP web
   // adapter keeps its wire-protocol facade. Any other adapter (sdk, acp,
@@ -342,9 +335,14 @@ export async function startBridgeEngine(
   // which is what the "adapter does not provide session projection" reply
   // means.
   const hostContext = options.hostContext;
-  const projectionSource = adapter instanceof HostDshAdapter && hostContext !== undefined
+  // Kept as its own binding: ancestor resolution for subagent approvals reads
+  // the persisted session headers through these same host services.
+  const hostServices = adapter instanceof HostDshAdapter && hostContext !== undefined
+    ? new HostServices(hostContext)
+    : undefined;
+  const projectionSource = hostServices !== undefined
     ? new HostSessionProjectionSource(
-        new HostServices(hostContext),
+        hostServices,
         {
           baseUrl: env.webBaseUrl,
           ...(env.provider === undefined ? {} : { provider: env.provider }),
@@ -356,6 +354,189 @@ export async function startBridgeEngine(
     : adapter instanceof WebDshAdapter
       ? new WebSessionProjectionSource(adapter)
       : undefined;
+  /**
+   * Keep `.session_aliases.json` in step with the workspace's sessions.
+   *
+   * Aliases used to be minted only when somebody ran `/sessions`, so a session
+   * created in the Web UI stayed invisible to `/use` until a chat happened to
+   * list it. Syncing on creation makes every session addressable as soon as it
+   * exists, whichever end created it.
+   *
+   * `syncSessions` prunes every alias whose session is missing from the
+   * candidates, so the list handed to it has to be the whole intended set
+   * rather than a delta.
+   */
+  /**
+   * Backoff for the boot-time sync, in milliseconds.
+   *
+   * The first sync runs from `startBridgeEngine`, which is before the Web route
+   * answering `/archived-sessions/sessions` is listening. A fresh boot therefore
+   * reads an empty body and `JSON.parse` throws — observed live at 14:40:19 on
+   * 2026-09-10, where a later trigger succeeded eleven seconds on. Two retries
+   * close that gap without turning a genuinely broken listing route into a
+   * silent success.
+   */
+  const aliasSyncRetryDelaysMs = [2_000, 5_000, 10_000];
+  const aliasSyncTimers = new Set<ReturnType<typeof setTimeout>>();
+  let aliasSyncInFlight = false;
+  /** A trigger that arrived mid-sync, replayed once the sync settles. */
+  let aliasSyncQueued = false;
+  let aliasSyncFailures = 0;
+  const syncSessionAliases = async (): Promise<void> => {
+    if (projectionSource === undefined) return;
+    if (aliasSyncInFlight) {
+      aliasSyncQueued = true;
+      return;
+    }
+    aliasSyncInFlight = true;
+    try {
+      const sessions = await projectionSource.listSessions();
+      await sessionAliases.syncSessions(sessions.map((session) => ({
+        sessionId: session.sessionId,
+        updatedAt: session.updatedAt,
+      })));
+      aliasSyncFailures = 0;
+    } catch (error) {
+      const delayMs = aliasSyncRetryDelaysMs[aliasSyncFailures];
+      if (delayMs === undefined) {
+        // A lagging alias table is a smaller problem than a bridge that refuses
+        // to boot, so the sync never escalates beyond a log line.
+        log.fail('session-aliases', error, { step: 'auto-sync' });
+      } else {
+        aliasSyncFailures += 1;
+        log.warn('session-aliases', 'auto-sync-retry', {
+          attempt: aliasSyncFailures,
+          delayMs,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        const timer = setTimeout(() => {
+          aliasSyncTimers.delete(timer);
+          void syncSessionAliases();
+        }, delayMs);
+        aliasSyncTimers.add(timer);
+      }
+    } finally {
+      aliasSyncInFlight = false;
+      if (aliasSyncQueued) {
+        aliasSyncQueued = false;
+        void syncSessionAliases();
+      }
+    }
+  };
+  /** Cancel any pending retry so a stopped engine leaves no timer behind. */
+  const stopAliasSync = (): void => {
+    for (const timer of aliasSyncTimers) clearTimeout(timer);
+    aliasSyncTimers.clear();
+  };
+  const disposeSessionCreated = hostContext?.on?.('session/created', () => {
+    void syncSessionAliases();
+  });
+  void syncSessionAliases();
+  let sessionProjectionController: SessionProjectionController | undefined;
+  const activeFeishuTurns = new Map<string, number>();
+  const finishFeishuTurn = (sessionId: string): void => {
+    const count = activeFeishuTurns.get(sessionId) ?? 0;
+    if (count <= 1) activeFeishuTurns.delete(sessionId);
+    else activeFeishuTurns.set(sessionId, count - 1);
+  };
+  /**
+   * The parent link of every persisted session, read from the session headers.
+   *
+   * The map is rebuilt per resolution rather than cached for the run: a
+   * subagent can ask for approval seconds after it is created, so a snapshot
+   * taken at boot would keep reporting the child as unowned and quietly send
+   * its escalation to the desktop.
+   */
+  const sessionParentLinks = async (): Promise<Map<string, string>> => {
+    const links = new Map<string, string>();
+    if (hostServices === undefined) return links;
+    for (const header of await hostServices.sessionHeaders()) {
+      const { parentSession } = header as PersistedParentLink;
+      if (typeof parentSession === 'string' && parentSession !== '') {
+        links.set(String(header.id), parentSession);
+      }
+    }
+    return links;
+  };
+
+  /**
+   * The session whose projection binding speaks for `sessionId`.
+   *
+   * A delegation's own id never has a binding — the chat is talking to its
+   * parent — so ownership has to come from the nearest ancestor that does.
+   * Without this walk a Feishu task that spawned a subagent sent every
+   * escalation to the desktop, where nobody was waiting for it.
+   *
+   * @param sessionId - the session that raised the request.
+   * @returns the owning ancestor's id, or undefined when none is bound.
+   */
+  const owningSessionId = async (sessionId: string): Promise<string | undefined> => {
+    if (sessionProjections.ownerOf(sessionId) !== undefined) return sessionId;
+    const links = await sessionParentLinks();
+    let current = links.get(sessionId);
+    for (let depth = 0; current !== undefined && depth < MAX_ANCESTOR_DEPTH; depth += 1) {
+      if (sessionProjections.ownerOf(current) !== undefined) return current;
+      const next = links.get(current);
+      // A malformed chain that points at itself must not spin.
+      if (next === undefined || next === current) break;
+      current = next;
+    }
+    return undefined;
+  };
+
+  const canRouteSessionToFeishu = async (sessionId: string): Promise<boolean> => {
+    const ownerId = await owningSessionId(sessionId);
+    if (ownerId === undefined) return false;
+    const binding = sessionProjections.ownerOf(ownerId);
+    if (binding === undefined) return false;
+    return binding.connectionMode === 'full' || (activeFeishuTurns.get(ownerId) ?? 0) > 0;
+  };
+
+  /**
+   * The scope a session's Feishu messages belong to, following delegations up to
+   * the session the chat is actually talking to.
+   *
+   * A subagent owns no scope, so resolving the destination from the caller's own
+   * session id alone would answer "unknown scope/chat" for a `lark_notify` that
+   * the routing guard had already admitted through its ancestor.
+   */
+  const scopeForSessionOrAncestor = async (sessionId: string): Promise<string | undefined> => {
+    const direct = sessions.scopeForSession(sessionId);
+    if (direct !== undefined) return direct;
+    const links = await sessionParentLinks();
+    let current = links.get(sessionId);
+    for (let depth = 0; current !== undefined && depth < MAX_ANCESTOR_DEPTH; depth += 1) {
+      const scope = sessions.scopeForSession(current);
+      if (scope !== undefined) return scope;
+      const next = links.get(current);
+      // A malformed chain that points at itself must not spin.
+      if (next === undefined || next === current) break;
+      current = next;
+    }
+    return undefined;
+  };
+  const observeFeishuPrompt = async ({ sessionId, rpcId, origin }: {
+    sessionId: string;
+    rpcId: string;
+    origin: { source: 'feishu'; messageId: string; scope: string; workspaceCwd: string };
+  }): Promise<void> => {
+    if (!sessionProjectionController) return;
+    const destination = scopeDirectory.resolve(origin.scope);
+    if (!destination) return;
+    await sessionProjectionController.connectFeishuTurn({
+      scope: origin.scope,
+      workspaceCwd: origin.workspaceCwd,
+      chatId: destination.chatId,
+      ...(destination.threadId ? { threadId: destination.threadId } : {}),
+      sessionId,
+      rpcId,
+      feishuMessageId: origin.messageId,
+    });
+    activeFeishuTurns.set(sessionId, (activeFeishuTurns.get(sessionId) ?? 0) + 1);
+  };
+  if (adapter instanceof WebDshAdapter || adapter instanceof HostDshAdapter) {
+    adapter.setPromptObserver(observeFeishuPrompt);
+  }
   const activeRuns = new ActiveRuns();
   const runPolicies = new RunPolicyStore();
   const concurrencyStore = new ConcurrencyStore();
@@ -379,6 +560,42 @@ export async function startBridgeEngine(
   let defaultNotificationPreference = notificationPreferenceFor(env.notificationDefault);
   let streaming: StreamingChannel | undefined;
   let larkChannel: LarkChannel | undefined;
+  const packageName = ownPackageInfo().name;
+  const channelUpdater = new InProcessChannelUpdater({
+    run: async (targetVersion) => {
+      await runUpgrade({
+        profile: dshProfileName,
+        bridgeProfile: profileName,
+        yes: true,
+        packageSpec: `${packageName}@${targetVersion}`,
+        restart: false,
+        output: (text) => log.info('upgrade', 'channel-progress', { text: text.trim() }),
+      });
+    },
+    complete: async (result) => {
+      if (!streaming) return;
+      const markdown = result.status === 'succeeded'
+        ? bilingualMarkdown(
+            `✅ ${packageName} 已更新到 \`${result.targetVersion}\`。请从托盘选择“重启 DSH”加载新版本。`,
+            `✅ ${packageName} was updated to \`${result.targetVersion}\`. Use “Restart DSH” from the tray to load it.`,
+          )
+        : bilingualMarkdown(
+            `⚠️ ${packageName} 更新到 \`${result.targetVersion}\` 失败。请发送 \`/doctor\` 检查后重试。`,
+            `⚠️ Failed to update ${packageName} to \`${result.targetVersion}\`. Send \`/doctor\` and retry.`,
+          );
+      await streaming.sendMarkdown(result.route.chatId, markdown, {
+        ...(result.route.threadId ? { threadId: result.route.threadId } : {}),
+      });
+      if (result.status === 'failed') {
+        log.warn('upgrade', 'channel-update-failed', {
+          id: result.id,
+          targetVersion: result.targetVersion,
+          error: result.error,
+        });
+      }
+    },
+  });
+  const channelUpdates = new ChannelUpdateController({ updater: channelUpdater });
   const notificationDispatcher = new NotificationDispatcher({
     preferences: notificationPreferences,
     ...(defaultNotificationPreference
@@ -401,14 +618,22 @@ export async function startBridgeEngine(
   const notifyToken = generateNotifyToken();
   const notifyServer = new NotifyServer({
     token: notifyToken,
-    resolve: (message) => {
+    canRouteSessionToFeishu,
+    resolve: async (message) => {
       if (message.scope) {
         return scopeDirectory.resolve(message.scope);
       }
       if (message.chatId) {
         return scopeDirectory.resolveChat(message.chatId);
       }
-      return undefined;
+      // `lark_notify` documents "omit scope to send to the current chat", so the
+      // destination has to come from the session that called it. Without this
+      // the tool failed with `unknown scope/chat: ` for every caller that took
+      // the documented default — the parent session included.
+      const scope = message.sessionId === undefined
+        ? undefined
+        : await scopeForSessionOrAncestor(message.sessionId);
+      return scope === undefined ? undefined : scopeDirectory.resolve(scope);
     },
     send: async (destination, payload) => {
       if (!streaming) throw new Error('bridge channel is not ready');
@@ -419,6 +644,7 @@ export async function startBridgeEngine(
     },
     ask: buildAskHandler({
       sessions,
+      canRouteSessionToFeishu,
       scopeDirectory,
       questions,
       channel: {
@@ -431,6 +657,7 @@ export async function startBridgeEngine(
     }),
     plan: buildPlanHandler({
       sessions,
+      canRouteSessionToFeishu,
       scopeDirectory,
       plans,
       channel: {
@@ -451,9 +678,9 @@ export async function startBridgeEngine(
     }),
     approval: buildApprovalHandler({
       sessions,
+      canRouteSessionToFeishu,
       scopeDirectory,
       approvals,
-      permissionPolicies,
       onApprovalWaiting: (scope, toolName) => notificationDispatcher.scheduleApprovalReminder(scope, toolName),
       channel: {
         sendCard: async (chatId, card, options) => {
@@ -473,6 +700,7 @@ export async function startBridgeEngine(
     }),
     file: buildFileHandler({
       sessions,
+      canRouteSessionToFeishu,
       scopeDirectory,
       allowedRoots: async (_sessionId, scope, workspace) => {
         const executionRoot = (await worktreeManager.ensure(scope, workspace)).cwd;
@@ -492,6 +720,7 @@ export async function startBridgeEngine(
     }),
     secret: buildSecretHandler({
       sessions,
+      canRouteSessionToFeishu,
       scopes: scopeDirectory,
       requests: secretRequests,
       actorForSession: (sessionId) => sessionActors.get(sessionId),
@@ -610,7 +839,6 @@ export async function startBridgeEngine(
           archiver,
           ...(role === undefined ? {} : { role }),
           approvals,
-          permissionPolicies,
           onApprovalWaiting: (approvalScope, toolName) => notificationDispatcher.scheduleApprovalReminder(approvalScope, toolName),
           questions,
           plans,
@@ -619,6 +847,7 @@ export async function startBridgeEngine(
           runCardAnchors,
           defaultWorkspace,
           sessionAliases,
+          onSessionTurnFinished: finishFeishuTurn,
           replyTo: first.messageId,
           deliverFinalReply: (replyScope, chatId, markdown, options) => replyDispatcher.deliver(replyScope, chatId, markdown, options),
           ...(scopeOwner ? { scopeOwner } : {}),
@@ -709,7 +938,6 @@ export async function startBridgeEngine(
     archiveMax: env.archiveMax,
     archiveMaxAgeDays: env.archiveMaxAgeDays,
     approvals,
-    permissionPolicies,
     notificationPreferences,
     notificationChannels,
     notificationSinks,
@@ -771,6 +999,9 @@ export async function startBridgeEngine(
         }
       : {}),
     sessionAliases,
+    onSessionProjectionReady: (controller) => {
+      sessionProjectionController = controller;
+    },
     createDiagnosticBundle: async (request) => {
       const service = new ServiceManager({
         profile: dshProfileName,
@@ -824,17 +1055,11 @@ export async function startBridgeEngine(
     channelKeepaliveMs: env.channelKeepaliveMs,
     channelHealthPollMs: env.channelHealthPollMs,
     onChannelUnrecoverable: (error) => {
-      // Last-resort self-heal (issue #108): the persistent channel could not
-      // be restored by the SDK's ping timeout or the app-level keepalive, so
-      // the engine cannot keep publishing a healthy heartbeat. Exit non-zero
-      // so the managed service / guardian restarts it with a fresh WebSocket
-      // generation. The guardian's takeover only engages once the engine
-      // stops writing a fresh heartbeat, so no double-consumer results.
-      log.fail('engine', 'channel-unrecoverable', {
+      // Feishu failure must not terminate the local DSH Web process. The user
+      // can reconnect or restart explicitly from the tray when needed.
+      log.fail('channel', 'unrecoverable', {
         error: error instanceof Error ? error.message : String(error),
       });
-      process.exitCode = 1;
-      setTimeout(() => process.exit(1), 300);
     },
   };
   if (activeProfile.preferences.stopGraceMs !== undefined) {
@@ -861,36 +1086,6 @@ export async function startBridgeEngine(
   }
   streaming = attachRunCardAnchors(adaptLarkChannel(bridge.channel), runCardAnchors);
   larkChannel = bridge.channel;
-  const deliverUpdateResult = async (): Promise<void> => {
-    await updateHandoff.deliverResult(async (state) => {
-      if (!streaming) throw new Error('channel is not ready');
-      const failureHint = guardianUpdateFailureHint(state.errorCode);
-      const markdown = state.status === 'succeeded'
-        ? bilingualMarkdown(
-            `✅ dsh-lark-bot 已更新到 \`${state.targetVersion}\`，机器人已完成重载。`,
-            `✅ dsh-lark-bot was updated to \`${state.targetVersion}\` and reloaded.`,
-          )
-        : bilingualMarkdown(
-            `⚠️ dsh-lark-bot 更新到 \`${state.targetVersion}\` 失败。${failureHint.zh}`,
-            `⚠️ Failed to update dsh-lark-bot to \`${state.targetVersion}\`. ${failureHint.en}`,
-          );
-      await streaming.sendMarkdown(state.route.chatId, markdown, {
-        ...(state.route.threadId ? { threadId: state.route.threadId } : {}),
-      });
-      if (state.status === 'failed') {
-        log.warn('upgrade', 'channel-update-failed', {
-          id: state.id,
-          targetVersion: state.targetVersion,
-          error: state.error,
-        });
-      }
-    });
-  };
-  void deliverUpdateResult().catch((error) => log.fail('upgrade', error, { step: 'deliver-result' }));
-  const updateResultTimer = setInterval(() => {
-    void deliverUpdateResult().catch((error) => log.fail('upgrade', error, { step: 'deliver-result' }));
-  }, 2_000);
-  updateResultTimer.unref?.();
   await recoverDurableJobs(jobRecovery, jobs, pending, streaming);
   await notifyServer.start();
   process.env.DSH_LARK_NOTIFY_URL = notifyServer.url ?? '';
@@ -899,17 +1094,6 @@ export async function startBridgeEngine(
   process.env.DSH_LARK_APPROVAL_URL = notifyServer.approvalUrl ?? '';
   process.env.DSH_LARK_FILE_URL = notifyServer.fileUrl ?? '';
   process.env.DSH_LARK_SECRET_URL = notifyServer.secretUrl ?? '';
-  const heartbeat = startHeartbeat(
-    paths.profilePath(profileName, 'guardian', 'heartbeat.json'),
-    process.pid,
-    env.heartbeatMs,
-    () => bridge.channelHealth?.(),
-  );
-  // Version equality only proves that replacement files were loaded. Mark the
-  // handoff successful after the channel, callback server, and heartbeat are
-  // all ready so a bridge that fails during startup cannot report success.
-  await updateHandoff.reconcile(currentVersion());
-  void deliverUpdateResult().catch((error) => log.fail('upgrade', error, { step: 'deliver-result' }));
   // Periodic new-version detection (issue #15): logs by default; pushes a
   // Feishu notification when DSH_LARK_UPGRADE_NOTIFY=1 and a target chat is
   // configured.
@@ -972,9 +1156,9 @@ export async function startBridgeEngine(
     stop: async () => {
       if (stopped) return;
       stopped = true;
+      disposeSessionCreated?.();
+      stopAliasSync();
       updateNotifier.stop();
-      clearInterval(updateResultTimer);
-      heartbeat.stop();
       await notifyServer.stop();
       await bridge.disconnect();
       await adapter.dispose?.();
@@ -985,7 +1169,6 @@ export async function startBridgeEngine(
         roleStore.flush(),
         scopeDirectory.flush(),
         isolationStore.flush(),
-        permissionPolicies.flush(),
         notificationPreferences.flush(),
         replyPolicies.flush(),
         executionModes.flush(),

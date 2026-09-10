@@ -1,61 +1,55 @@
 ---
 title: 配置
-description: 环境变量、profile、dsh Web 可视化设置与出站通知渠道。
+description: 飞书应用、DSH profile、会话衔接和群聊响应配置。
 ---
 
 # 配置
 
-环境变量、profile、dsh Web 可视化设置与出站通知渠道。
+## 常用环境变量
 
-## 环境变量
-
-运行时读取 `DSH_LARK_*` 变量并与 `~/.dsh-lark/config.json` 合并。完整模板见仓库 `.env.example`。常用项：
-
-```bash
-# 应用凭据（优先首次扫码绑定，以下为自动化部署的覆盖项）
-# DSH_LARK_APP_ID=
-# DSH_LARK_APP_SECRET=
+```text
+DSH_LARK_APP_ID=cli_xxx
+DSH_LARK_APP_SECRET=...
 DSH_LARK_TENANT=feishu
-
-# agent 后端模式：web（默认）| sdk | acp | headless
 DSH_LARK_ADAPTER=web
-
-# provider/model 路由
-# DSH_LARK_PROVIDER=provider-id
-# DSH_LARK_MODEL=model-id
-
-# 默认主动提醒：off | completed(完成+失败) | all(+审批)
-DSH_LARK_NOTIFICATION_DEFAULT=off
-
-# 安全网守护心跳间隔（ms）
-DSH_LARK_HEARTBEAT_MS=5000
+DSH_LARK_DSH_PROFILE=web
+DSH_LARK_GROUP_NO_AT=true
+DSH_LARK_GROUP_POLL_MS=0
 ```
 
-::: info 出站通知渠道无需环境变量
-Telegram / 企业微信等出站通知渠道**不需要环境变量**——在聊天里用管理员 `/channels` 配置，scope 用 `/notifications … sinks=<id>` 开启。凭据存于 0600 文件，永不回显。
-:::
+- `DSH_LARK_ADAPTER=web`：使用 DSH Web host 的进程内 session 能力；
+- `DSH_LARK_GROUP_NO_AT=true`：群聊默认不要求 `@`；
+- `DSH_LARK_GROUP_POLL_MS=0`：已开通 `im:message.group_msg` 时只使用事件流，不轮询群历史。
 
-## Profile 与安装
+完整模板见仓库 `.env.example`。
 
-```bash
-# 安装并注册为 dsh profile
-npx dsh-lark-bot@latest setup --profile dsh-lark
+## 本地源码安装
 
-# 启动并按 profile 管理
-dsh web
-dsh-lark-bot service install|start|status|logs|restart|stop|uninstall --profile dsh-lark
+```powershell
+pnpm install
+pnpm build
+$packagePath = 'file:' + ((Resolve-Path .).Path -replace '\\', '/')
+node bin/dsh-lark-bot.mjs setup --profile dsh-lark --package $packagePath
 ```
 
-## dsh Web 可视化设置
+当前 fork 尚未以独立 npm 包发布；不要使用 `npx dsh-lark-bot@latest`。
 
-在官方 Settings → Plugins 页面（dsh Web）用浏览器卡片集中呈现应用、workspace、模型、并行数、adapter 与提醒默认值，并逐项标注「重连 / 下一任务生效」；诊断区直接检查脱敏 settings 快照。`/status` 与 `/doctor` 保留为运行态降级路径。密钥永不进入 Host → Web 响应。
+## Profile 与数据目录
 
-## Scope 级覆盖
+`DSH_HOME` 是 DSH 的数据根目录，包含 profiles、插件依赖、设置、凭据引用、session 与运行状态。正式环境与
+测试环境可使用不同 `DSH_HOME` 隔离，但不能同时占用同一个飞书应用长连接或 Web 端口。
 
-- `/concurrency`、`/notifications`、`/mode`、`/density`、`/replies` 等 scope 覆盖优先于 Web 默认。
-- 模型优先级：每会话 `/model use` > 角色 > profile > dsh 默认 > 环境。
-- 通知默认：无 override 时继承 profile 的 `notificationDefault`；`/notifications default` 删除 override 恢复继承。
+## 会话连接状态
 
-## 目录与状态文件
+飞书连接状态保存在插件 profile 的 projection 状态中：每条绑定记录包含飞书 scope、工作区、session ID、
+聊天 ID 和 `half|full` 模式。`/detach` 只删除连接记录，不删除 DSH session。
 
-默认根目录 `~/.dsh-lark/`，按 profile 存放：`sessions.json`、`jobs.json`、`scopes.json`、`roles.json`、`permission-policies.json`、`notification-preferences.json`、`notification-channels.json`（0600）、`archives/`、`logs/` 等。
+## 群聊响应
+
+```text
+/mention off
+/mention on
+/mention default
+```
+
+也可由管理员指定 `chatId`。普通群聊默认整群共用一个 session，不按成员拆分。

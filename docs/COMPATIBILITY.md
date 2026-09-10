@@ -1,96 +1,68 @@
-# 兼容矩阵与升级政策 · Compatibility Matrix & Upgrade Policy
+# 兼容矩阵与升级政策
 
-> 本文是 DeepSeek Harness 兼容性的**单一事实来源**，机器可读副本位于
-> [`src/config/dsh-compat.ts`](../src/config/dsh-compat.ts)，配套自动化：
-> `scripts/check-dsh-upstream.mjs`（上游雷达）与 `scripts/probe-dsh-compat.mjs`
-> （真实可用性探测，CI `compat-probe` 任务）。
+机器可读单一事实源：`src/config/dsh-compat.ts`。
 
-## 1. 兼容矩阵
+## 当前矩阵
 
-> 最后验证：2026-09-07（生产 `web` profile 实测：`0.1.2-rc.1` 宿主启动、插件加载、
-> 浏览器启动图收录本包 `./client` bundle、`/archived-sessions/*` 与
-> `/__chameleon/session/*` 返回真实会话数据）。
->
-> **本次未复测的部分**：SDK / ACP runtime 的 initialize 握手、`notify`/`ask`/
-> `plan`/`approval`、live session 续接与 restart collision，均未在
-> `0.1.2-rc.1` 上重跑，因此下表中 SDK / ACP 两行只代表「已 pin 到该版本」，
-> 不代表「已实测通过」。`web` adapter 的 session projection 在本版本上仍是
-> 已知损坏（详见 [`UPGRADE.md`](./UPGRADE.md) 的破坏性变更实录）。
+| 组件 | 锁定版本 | 当前状态 |
+| --- | --- | --- |
+| DeepSeek Harness CLI | `0.1.2-rc.1` | 正式 `web` profile 正在运行 |
+| `@deepseek-ai/dsh-sdk-client` | `0.1.2-rc.1` | 精确 pin |
+| `@deepseek-ai/dsh-sdk-jsonrpc-server` | `0.1.2-rc.1` | 精确 pin |
+| `@deepseek-ai/dsh-acp` | `0.1.2-rc.1` | 精确 pin |
+| Node.js | `>=22.19.0` | `package.json#engines` |
 
-| 组件 | 锁定版本 | 状态 |
-| :--- | :--- | :--- |
-| DeepSeek Harness CLI（`dsh`） | `0.1.2-rc.1` | 宿主启动 + 插件加载实测通过 |
-| `@deepseek-ai/dsh-sdk-client` | `0.1.2-rc.1` | 已 pin，**未实测握手** |
-| `@deepseek-ai/dsh-sdk-jsonrpc-server` | `0.1.2-rc.1` | 已 pin，**未实测握手** |
-| `@deepseek-ai/dsh-acp` | `0.1.2-rc.1` | 已 pin，**未实测握手** |
-| Node.js | `>=22.19.0` | `engines` 与 `dsh-compat.ts` 一致 |
+截至 2026-09-09，类型检查以及 session 投影、命令、原生审批镜像和进程内升级的定向回归已经通过。
+最终 `verifiedAt` 只在完成正式 profile 构建、热加载/重启和实体飞书验证后更新。
 
-版本约束规则：
+## 推荐运行路径
 
-- SDK client 与托管 SDK server / ACP 顶层包精确 pin；本仓库 lockfile 的 SDK peer graph 通过
-  `pnpm.overrides` 统一到矩阵版本。override 不会传递给下游，因此每次发现新上游版本都必须重跑
-  全新 consumer 安装与真实 probe，不能把当前注册表快照当成永久保证。
-- 本包不直接依赖 `@deepseek-ai/dsh-tools`；工具以 raw JSON Schema 注册到宿主 registry，
-  防止两份模块级 scheduler Symbol。lockfile 不允许混入任何非当前矩阵版本的 dsh core 包。
-- `dsh-compat.ts` 是唯一事实来源；`scripts/check-dsh-upstream.mjs` 会校验它和
-  `package.json` 的 `dsh-sdk-client` 版本一致，不一致即报错（防漂移）。
-- 模型 / provider / 凭据管理走 dsh 官方 `settings.yaml` + `.credentials.yaml` 存储协议，
-  与 SDK 版本无关；SDK/ACP 协议漂移集中在 `src/adapters/dsh/`，宿主工具 registry 漂移
-  集中在 `src/notify/` 的 raw-schema 注册边界。
+DSH 插件模式优先使用进程内 `host` adapter：
 
-## 2. 升级政策
+- 直接读取宿主 session 列表、标题和事件；
+- 直接执行 create/trash/purge/rename；
+- 不依赖浏览器认证 token；
+- 不依赖外部 HTTP RPC 名称或 events mux 路由。
 
-DeepSeek Harness 处于 developer preview（0.1.0-rc 系列），接口频繁破坏性变更。政策：
+`web` adapter 保留为兼容路径。`sdk`、`acp` 与 `headless` 是独立 runtime adapter，不提供宿主 session
+投影，不能作为 `/sessions`、`/use`、`/delete`、`/purge` 的数据源。
 
-1. **优先跟随 stable**：`latest` dist-tag 出现非 rc 稳定版（或 rc 更高版本）时，按第 3 节流程升级。
-2. **不在 rc 迭代期盲目追新**：除非修复直接影响本 bot 的缺陷，否则保持冻结版本，
-   等一个被验证的版本再批量对齐。
-3. **升级 = 一次受控发布**：改版本 → 全量回归 → 更新验证日期 → 发版，而不是原地换依赖。
+## 版本锁定规则
 
-## 3. 升级操作手册（Upgrade Runbook）
+- DSH 仍是预发布版本，SDK client/server/ACP 使用精确版本，不用宽松范围；
+- `package.json`、`pnpm-lock.yaml`、`src/config/dsh-compat.ts` 和 `dshWorkshop.compatibility` 必须一致；
+- 本包不直接依赖多份 DSH tool scheduler；桥接工具在受控边界注册；
+- 升级不得只改全局 DSH CLI，必须重新验证 host services、session 事件、审批和插件加载。
 
-以从当前 `0.1.2-rc.1` 升级到 `X.Y.Z` 为例：
+## 升级流程
 
-1. **确认上游**：`pnpm upstream:report`（或每日 CI `upstream-release-watch` 任务）合并检查
-   GitHub Releases 与 npm 全版本/time/dist-tags；阅读自动创建的 `upstream-update` Issue，再人工判断
-   SDK/ACP release notes 中的破坏性变更。
-2. **更新单一事实来源**：改 `src/config/dsh-compat.ts` 中 `harness` / `sdkClient` /
-   `sdkServer` / `acp`（按需），`verifiedAt` 留空待验证后填写。
-3. **同步锁定**：把 `package.json` 的 `@deepseek-ai/dsh-sdk-client` 改为同一精确版本，
-   执行 `pnpm install` 更新锁文件。
-4. **全量回归**：`pnpm release:check`（diff 检查 + typecheck + 全部测试 + 构建 +
-   上游一致性检查 + 真实 dsh 可用性探测）。发布 workflow 在上传任何包之前也会独立执行同一探针，
-   因而普通 CI 失败时不能绕过兼容门禁继续发布。
-5. **单独复跑真实可用性探测**：需要定位兼容问题时可运行 `pnpm compat:probe`（本机），或检查推送后
-   CI `compat-probe` 任务：
-   在临时 DSH_HOME 安装锁定版 dsh，走 SDK / ACP runtime 初始化握手，并用本地
-   OpenAI-compatible fixture 验证 ACP 文本任务 + plan + one-shot permission 拒绝，以及 SDK 任务、`lark_notify` / `lark_ask_user` /
-   `lark_request_plan_approval` 回调、计划前 `bash` 强制拒绝 → 计划批准 → rc.8 one-shot approval → 实际执行的顺序、
-   one-shot 拒绝后 agent 继续替代工具路径、同一 live runtime 的 session 续接，以及关闭重开后
-   persisted-log collision 的上游边界明确可识别；bridge 的 live-owner 检查必须在调用上游前拒绝
-   复用失效 binding，并用 transcript 新建 session。
-6. **实机回归**：重启 profile（`dsh --profile <name>`，或守护模式下
-   `dsh-lark-bot guardian status` 观察接管/交还）后运行 `dsh-lark-bot doctor`，
-   确认 dsh profile 中插件装载正常（`dsh --profile <name>` 内引擎启动）；飞书会话内跑一轮真实任务。
-7. **更新验证日期**：把 `verifiedAt` 改为当天，同步本文矩阵表与
-   `README.md`「兼容性」章节。
-8. **发版**：提交、push、打 tag，release 流水线自动发布双包。
+1. 在独立 `DSH_HOME` 安装候选 DSH；
+2. 更新 `src/config/dsh-compat.ts` 与精确依赖；
+3. `pnpm install` 更新 lockfile；
+4. 运行 `pnpm typecheck`、定向回归、`pnpm test`、`pnpm build`；
+5. 运行 `pnpm compat:probe`；
+6. 测试 Web 新 session 不连接飞书、飞书首次消息半衔接、`/switch`、`/detach`、删除生命周期与审批 OR；
+7. 安装到正式 profile并热加载；失败再显式重启；
+8. 更新 `verifiedAt` 和本文日期。
 
-## 4. 自动化
+详细命令见 `docs/UPGRADE.md`。
 
-| 机制 | 位置 | 作用 |
-| :--- | :--- | :--- |
-| 上游雷达 | `scripts/check-dsh-upstream.mjs` + `scripts/upstream-release-config.mjs` + `.github/workflows/dsh-upstream.yml`（每日 03:17 UTC + 手动触发） | dsh + dsh-TUI 双源归一；逐版本创建/补充 `upstream-update` Issue；同时校验本地矩阵、workshop、lockfile 与无直接 dsh-tools 依赖 |
-| 真实探测 | `scripts/probe-dsh-compat.mjs` + `.github/workflows/ci.yml`（`compat-probe` 任务）+ `.github/workflows/release.yml`（发布前门禁） | 临时 DSH_HOME 安装锁定 dsh，验证 rc.7 SQLite 被 rc.8 原样拒绝、SDK / ACP initialize、ACP task/permission/image capability，以及 SDK notify/ask/plan/approval、live resume/restart collision；策略预检、低风险静默放行和真实一次性审批分别计数，并由快速单测对照生产 handler 契约；模拟模型回合设有请求上限，状态断言漂移时快速失败而不耗尽内存 |
-| 发版前检查 | `pnpm release:check`（= `ci:local` + 上游一致性 + 真实兼容探针） | 本地全量门禁；GitHub Release 在发布包之前重复真实探针 |
+## Windows 测试说明
 
-## 5. 风险披露
+Windows 未开启开发人员模式或没有“创建符号链接”权限时，目录 symlink 测试会报 `EPERM`。此外 NTFS
+不提供与 POSIX 完全相同的 `0600` mode 位，因此对应断言在 Windows 上可能失败。实际 Windows 凭据安全
+由 owner-only ACL 测试覆盖。
 
-- dsh 仍是 pre-release：即使锁定版本，接口仍可能随 patch 行为变化；以 CI 实测为准。
-- 探测任务需要网络与 `pnpm`；失败时优先看 workflow 日志中的 dsh 安装 / 握手错误。
-- 发布雷达当前首次基线（2026-08-23 核验）为 dsh `0.1.1-rc.2`、dsh-TUI `0.9.0`；基线只控制
-  通知起点，不代表本项目已经兼容该版本。GitHub/npm 单源故障会在 Issue 中标注降级，双源均失败则
-  workflow 失败且不创建不完整通知。
-- rc.8 的已知 session 边界与本次验证限制见 [`DSH_RC8_AUDIT.md`](DSH_RC8_AUDIT.md)。
-- rc.8 不兼容 schema 只属于 opt-in SQLite provider；托管 SDK/ACP 使用 JSONL。自定义 SQLite profile
-  不自动迁移，必须保留旧 runtime 或自行导出后新建 schema 17 数据库。
+这些平台限制必须与业务回归分开报告，不能把它们误写成 session 或审批功能失败。
+
+## 自动化
+
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm upstream:report` | 检查 DSH 上游版本和本地矩阵漂移 |
+| `pnpm compat:probe` | 在临时 DSH 环境验证 runtime/adapter/审批契约 |
+| `pnpm ci:local` | diff、类型、全测、构建与发布包检查 |
+| `pnpm release:check` | `ci:local` + 上游一致性 + 兼容探针 |
+
+当前探针的审批拒绝层是 `dsh-native-approval`。旧的插件级 `tool-approval`、权限策略预检和 Guardian 路径
+已不属于兼容目标。

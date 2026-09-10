@@ -16,6 +16,7 @@ import {
 import { ownPackageInfo } from '../../../src/adapters/dsh/own-package.js';
 
 const tempDirs: string[] = [];
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -30,7 +31,7 @@ function installPlugin(root: string) {
       join(pluginRoot, 'package.json'),
       JSON.stringify({ name: ACP_PACKAGE, version: ACP_VERSION }),
     );
-    await symlink(own.root, join(root, 'node_modules', own.name), 'dir');
+    await symlink(own.root, join(root, 'node_modules', own.name), directoryLinkType);
   };
 }
 
@@ -44,14 +45,14 @@ describe('resolveAcpLaunch', () => {
     expect(patch).toContain("id: lark-ask");
     expect(patch).toContain("name: 'dsh-lark-bot/ask'");
     expect(patch).toContain("id: lark-plan-approval");
-    expect(patch).toContain('policyEndpoint: !!js process.env.DSH_LARK_APPROVAL_URL');
+    expect(patch).not.toContain('policyEndpoint:');
     expect(patch).toContain("name: 'dsh-lark-bot/plan'");
     expect(patch).not.toContain('id: lark-approval-answerer');
-    expect(patch).toContain('use lark_request_plan_approval');
-    expect(patch).toContain('The bridge policy treats one uncomposed shell call as read-only');
-    expect(patch).toContain('do not try an equivalent command, tool, or path');
+    expect(patch).toContain('Use lark_request_plan_approval');
+    expect(patch).toContain('The Feishu bridge does not add a tool gate');
+    expect(patch).toContain('only DSH native approval and sandbox policy may block execution');
     expect(patch).toContain('use lark_ask_user and wait for the answer');
-    expect(patch).toContain('[policy-denial layer=...]');
+    expect(patch).not.toContain('[policy-denial layer=...]');
     expect(patch).toContain('uses lark_ask_user for interactive answers');
   });
 
@@ -139,7 +140,7 @@ describe('ensureAcpProfile', () => {
       model: 'deepseek-v4-flash',
       install: async (installRoot) => {
         await rm(join(installRoot, 'node_modules', own.name), { recursive: true, force: true });
-        await symlink(own.root, join(installRoot, 'node_modules', own.name), 'dir');
+        await symlink(own.root, join(installRoot, 'node_modules', own.name), directoryLinkType);
       },
     });
     expect(result.ok).toBe(true);

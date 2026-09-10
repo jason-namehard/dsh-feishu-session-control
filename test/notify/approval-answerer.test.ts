@@ -8,40 +8,64 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+type Listener = (request: unknown, next: () => Promise<string>) => Promise<string>;
+
+/** Capture the one listener the module installs, and nothing else. */
+function install(config: { endpoint?: string; token?: string } = {
+  endpoint: 'http://127.0.0.1:1234/approval',
+  token: 'secret',
+}): { listener: Listener; events: string[] } {
+  let listener: Listener | undefined;
+  const events: string[] = [];
+  apply({
+    on: vi.fn((event: string, value: Listener) => {
+      events.push(event);
+      if (event === 'approval/request') listener = value;
+    }),
+    tools: { get: vi.fn() },
+  } as never, config);
+  if (listener === undefined) throw new Error('approval/request listener was not installed');
+  return { listener, events };
+}
+
+function respond(body: unknown, ok = true): void {
+  globalThis.fetch = vi.fn().mockResolvedValue({ ok, json: async () => body }) as never;
+}
+
+const request = (extra: Record<string, unknown> = {}): unknown => ({
+  agent: { session: { id: 'session-1' } },
+  toolName: 'pwsh',
+  ...extra,
+});
+
 describe('lark approval answerer', () => {
-  it('answers an official approval/request through the bridge callback', async () => {
-    let listener: ((request: unknown, next: () => Promise<string>) => Promise<string>) | undefined;
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ ok: true, outcome: 'allowed-once' }),
-    });
-    globalThis.fetch = fetchMock as never;
-    apply({
-      on: vi.fn((event: string, value: typeof listener) => {
-        if (event === 'approval/request') listener = value;
-      }),
-      tools: { get: vi.fn() },
-    } as never, { endpoint: 'http://127.0.0.1:1234/approval', token: 'secret' });
+  it('returns a Feishu decision without ever asking the desktop', async () => {
+    respond({ ok: true, owned: true, outcome: 'allowed-once' });
+    const { listener } = install();
+    const next = vi.fn(async () => 'unavailable');
 
-    const signal = new AbortController().signal;
-    const result = await listener?.({
-      agent: { session: { id: 'session-1' } },
-      toolName: 'bash',
-      callId: 'call-1',
-      reason: 'Run the requested test suite',
-      signal,
-    }, async () => 'unavailable');
+    await expect(listener(request(), next)).resolves.toBe('allowed-once');
 
-    expect(result).toBe('allowed-once');
-    expect(fetchMock).toHaveBeenCalledWith(
+    // The whole point of the rewrite: a card that Feishu answered must not have
+    // produced a second prompt the desktop can never close.
+    expect(next).not.toHaveBeenCalled();
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('forwards the request fields the card renderer needs', async () => {
+    respond({ ok: true, owned: true, outcome: 'allowed-once' });
+    const { listener } = install();
+
+    await listener(request({ callId: 'call-1', reason: 'Run the requested test suite' }), async () => 'unavailable');
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
       'http://127.0.0.1:1234/approval',
       expect.objectContaining({
         method: 'POST',
-        signal,
         body: JSON.stringify({
           token: 'secret',
           sessionId: 'session-1',
-          toolName: 'bash',
+          toolName: 'pwsh',
           callId: 'call-1',
           reason: 'Run the requested test suite',
         }),
@@ -49,126 +73,86 @@ describe('lark approval answerer', () => {
     );
   });
 
-  it('returns rejected as a normal decision and fails closed on callback errors', async () => {
-    let listener: ((request: unknown, next: () => Promise<string>) => Promise<string>) | undefined;
-    const on = (event: string, value: typeof listener): void => {
-      if (event === 'approval/request') listener = value;
-    };
-    globalThis.fetch = vi.fn().mockResolvedValue({
+  it('treats a Feishu rejection as final', async () => {
+    respond({
       ok: true,
-      json: async () => ({
-        ok: true,
-        outcome: 'rejected',
-        denial: {
-          layer: 'permission-policy',
-          reason: 'scope policy is deny',
-          toChange: 'run /permission ask',
-        },
-      }),
-    }) as never;
-    apply({ on, tools: { get: vi.fn() } } as never, { endpoint: 'http://127.0.0.1/approval', token: 't' });
-    await expect(listener?.({
-      agent: { session: { id: 's' } }, toolName: 'write', reason: 'edit',
-    }, async () => 'unavailable')).resolves.toBe('rejected');
+      owned: true,
+      outcome: 'rejected',
+      denial: {
+        layer: 'dsh-native-approval',
+        reason: 'DSH rejected this tool request',
+        toChange: 'approve it in DSH Web or Feishu',
+      },
+    });
+    const { listener } = install();
+    const next = vi.fn(async () => 'allowed-once');
 
+    await expect(listener(request(), next)).resolves.toBe('rejected');
+
+    // A rejected card used to fall through to the desktop and ask again.
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('reports a Feishu-owned cancellation as cancelled', async () => {
+    respond({ ok: true, owned: true, outcome: 'cancelled' });
+    const { listener } = install();
+    const next = vi.fn(async () => 'allowed-once');
+
+    await expect(listener(request(), next)).resolves.toBe('cancelled');
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('keeps an owned request with Feishu even when the response carries no usable outcome', async () => {
+    respond({ ok: false, owned: true, error: 'approval cancelled' }, false);
+    const { listener } = install();
+    const next = vi.fn(async () => 'allowed-once');
+
+    await expect(listener(request(), next)).resolves.toBe('cancelled');
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('hands a session the engine will not route to the desktop', async () => {
+    respond({ ok: false, error: 'session is not currently connected to Feishu: session-1' }, false);
+    const { listener } = install();
+    const next = vi.fn(async () => 'allowed-once');
+
+    await expect(listener(request(), next)).resolves.toBe('allowed-once');
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('hands the request to the desktop when the engine is unreachable', async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error('offline')) as never;
-    await expect(listener?.({
-      agent: { session: { id: 's' } }, toolName: 'write', reason: 'edit',
-    }, async () => 'unavailable')).resolves.toBe('unavailable');
+    const { listener } = install();
+    const next = vi.fn(async () => 'allowed-once');
+
+    await expect(listener(request(), next)).resolves.toBe('allowed-once');
+    expect(next).toHaveBeenCalledOnce();
   });
 
-  it('forces high-risk pre-execute approval and returns rejection as a deny result', async () => {
-    let preExecute: ((execution: unknown, next: () => Promise<unknown>) => Promise<unknown>) | undefined;
-    const on = (event: string, listener: unknown): void => {
-      if (event === 'tools/pre-execute') preExecute = listener as typeof preExecute;
-    };
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        outcome: 'rejected',
-        denial: {
-          layer: 'permission-policy',
-          reason: 'scope policy is deny',
-          toChange: 'run /permission ask',
-        },
-      }),
-    }) as never;
-    apply({
-      on,
-      tools: { get: () => ({ presentCall: () => ({ card: 'terminal' }) }) },
-    } as never, { endpoint: 'http://127.0.0.1/approval', token: 't' });
-    const next = vi.fn(async () => ({ kind: 'allow' }));
-    await expect(preExecute?.({
-      name: 'bash', arguments: { command: 'rm file', description: 'Remove generated file' },
-      agent: { session: { id: 's' } },
-    }, next)).resolves.toMatchObject({
-      kind: 'deny',
-      reason: expect.stringContaining('[policy-denial layer=permission-policy]'),
-    });
+  it('calls no answerer at all when the bridge is not configured', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as never;
+    const { listener } = install({});
+    const next = vi.fn(async () => 'unavailable');
+
+    await expect(listener(request(), next)).resolves.toBe('unavailable');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('short-circuits a request DSH already withdrew', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as never;
+    const { listener } = install();
+    const next = vi.fn(async () => 'allowed-once');
+
+    await expect(listener(request({ signal: AbortSignal.abort() }), next)).resolves.toBe('cancelled');
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('consults the scope policy before allowing simple read-only shell inspections', async () => {
-    let preExecute: ((execution: unknown, next: () => Promise<unknown>) => Promise<unknown>) | undefined;
-    const on = (event: string, listener: unknown): void => {
-      if (event === 'tools/pre-execute') preExecute = listener as typeof preExecute;
-    };
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        outcome: 'rejected',
-        denial: {
-          layer: 'permission-policy',
-          reason: 'scope policy is deny',
-          toChange: 'run /permission ask',
-        },
-      }),
-    });
-    globalThis.fetch = fetchMock as never;
-    apply({
-      on,
-      tools: { get: () => ({ presentCall: () => ({ card: 'terminal' }) }) },
-    } as never, { endpoint: 'http://127.0.0.1/approval', token: 't' });
-    const next = vi.fn(async () => ({ kind: 'allow' }));
-
-    await expect(preExecute?.({
-      name: 'bash', arguments: { command: 'git status --short' },
-      agent: { session: { id: 's' } },
-    }, next)).resolves.toMatchObject({
-      kind: 'deny',
-      reason: expect.stringContaining('[policy-denial layer=permission-policy]'),
-    });
-    expect(next).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('allows exactly the approved execution and reuses it for a nested official request', async () => {
-    let preExecute: ((execution: unknown, next: () => Promise<unknown>) => Promise<unknown>) | undefined;
-    let approval: ((request: unknown, next: () => Promise<string>) => Promise<string>) | undefined;
-    const on = (event: string, listener: unknown): void => {
-      if (event === 'tools/pre-execute') preExecute = listener as typeof preExecute;
-      if (event === 'approval/request') approval = listener as typeof approval;
-    };
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ ok: true, outcome: 'allowed-once' }),
-    });
-    globalThis.fetch = fetchMock as never;
-    apply({
-      on,
-      tools: { get: () => ({ presentCall: () => ({ kind: 'edit' }) }) },
-    } as never, { endpoint: 'http://127.0.0.1/approval', token: 't' });
-    const agent = { session: { id: 's' } };
-    const result = await preExecute?.(
-      { name: 'edit_file', arguments: { path: 'a.ts' }, agent },
-      async () => approval?.({ agent, toolName: 'edit_file', callId: 'call-1' }, async () => 'unavailable'),
-    );
-    expect(result).toBe('allowed-once');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
-      sessionId: 's', toolName: 'edit_file', toolInput: { path: 'a.ts' },
-    });
+  it('does not install a tools/pre-execute gate', () => {
+    const { events } = install();
+    expect(events).toEqual(['approval/request']);
   });
 });

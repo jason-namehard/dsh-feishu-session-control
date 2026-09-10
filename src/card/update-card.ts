@@ -22,8 +22,8 @@ function body(input: UpdateCardInput, locale: CardLocale): Record<string, unknow
       {
         tag: 'markdown',
         content: zh
-          ? `发现新版本：\`${input.current}\` → \`${input.latest}\`\n\n确认后将由 Guardian 在后台更新包、运行时配置并重载机器人。正在执行的任务会被中断；会话、归档、配置与凭据不会被删除。`
-          : `Update available: \`${input.current}\` → \`${input.latest}\`\n\nGuardian will update the package and runtime profiles in the background, then reload the bot. Active tasks will be interrupted; sessions, archives, configuration, and credentials are preserved.`,
+          ? `发现新版本：\`${input.current}\` → \`${input.latest}\`\n\n确认后将在当前 DSH 进程内更新包与运行时配置。更新完成后请从托盘重启 DSH 以加载新版本；会话、归档、配置与凭据不会被删除。`
+          : `Update available: \`${input.current}\` → \`${input.latest}\`\n\nThe package and runtime profiles will be updated inside the current DSH process. Restart DSH from the tray afterward to load the new version; sessions, archives, configuration, and credentials are preserved.`,
       },
       {
         tag: 'button',

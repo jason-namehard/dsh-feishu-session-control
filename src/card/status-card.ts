@@ -14,7 +14,7 @@ export interface StatusCardInput {
   version: string;
   isolation: string;
   executionMode?: ExecutionMode;
-  permissionPolicy?: 'ask' | 'allow' | 'deny';
+  permissionPolicy?: string;
   notificationPreference?: NotificationPreference;
   /** Enabled outbound notification channel ids (issue #113). */
   notificationChannels?: string[];

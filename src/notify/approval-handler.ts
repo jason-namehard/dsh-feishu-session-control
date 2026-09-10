@@ -7,10 +7,8 @@ import { renderApprovalCard } from '../card/approval-card.js';
 import { bilingualMarkdown } from '../card/i18n.js';
 import { log } from '../core/logger.js';
 import type { SessionStore } from '../session/store.js';
-import type { PermissionPolicyStore } from '../bot/permission-policy-store.js';
+import type { CanRouteSessionToFeishu } from './can-route.js';
 import {
-  permissionPolicyDenial,
-  policyDenialText,
   toolApprovalDenial,
   type PolicyDenial,
 } from '../policy/tool-policy.js';
@@ -22,9 +20,9 @@ export interface ApprovalPayload {
   callId?: string;
   reason?: string;
   toolInput?: unknown;
-  /** Resolve the persisted scope policy without creating an approval card. */
+  /** Deprecated; retained for wire compatibility and ignored. */
   policyCheckOnly?: boolean;
-  /** Low-risk calls are silently allowed while the scope policy is `ask`. */
+  /** Deprecated; retained for wire compatibility and ignored. */
   lowRisk?: boolean;
 }
 
@@ -33,14 +31,25 @@ export interface ApprovalResult {
   outcome?: ApprovalOutcome;
   error?: string;
   denial?: PolicyDenial;
+  /**
+   * The engine took ownership of this request: a Feishu card was delivered and
+   * the request's answer belongs to Feishu. The answerer must then NOT also ask
+   * the desktop, because a prompt the native answerer already surfaced cannot
+   * be recalled.
+   *
+   * Absent — never `false` — when no card was delivered. That absence is the
+   * single "desktop owns it" signal the answerer acts on.
+   */
+  owned?: boolean;
+  /** Deprecated; this bridge no longer applies its own permission policy. */
   policy?: 'ask' | 'allow' | 'deny';
 }
 
 export interface ApprovalHandlerDeps {
   sessions: SessionStore;
+  canRouteSessionToFeishu?: CanRouteSessionToFeishu;
   scopeDirectory: ScopeDirectory;
   approvals: ApprovalRegistry;
-  permissionPolicies?: PermissionPolicyStore;
   onApprovalWaiting?: (scope: string, toolName: string) => () => void;
   channel: {
     sendCard(chatId: string, card: object, options?: SendOptions): Promise<string | undefined>;
@@ -53,41 +62,14 @@ export function buildApprovalHandler(
   deps: ApprovalHandlerDeps,
 ): (payload: ApprovalPayload, signal?: AbortSignal) => Promise<ApprovalResult> {
   return async (payload, signal) => {
+    const canRoute = deps.canRouteSessionToFeishu;
+    if (canRoute !== undefined && (await canRoute(payload.sessionId)) === false) {
+      return { ok: false, error: `session is not currently connected to Feishu: ${payload.sessionId}` };
+    }
     const scope = deps.sessions.scopeForSession(payload.sessionId);
     if (!scope) return { ok: false, error: `unknown session: ${payload.sessionId}` };
     const destination = deps.scopeDirectory.resolve(scope);
     if (!destination) return { ok: false, error: `unknown scope: ${scope}` };
-    const policy = deps.permissionPolicies?.get(scope) ?? 'ask';
-    if (payload.policyCheckOnly) {
-      return {
-        ok: true,
-        policy,
-        ...(policy === 'deny'
-          ? { denial: permissionPolicyDenial(scope, payload.toolName) }
-          : {}),
-      };
-    }
-    if (policy === 'allow') return { ok: true, outcome: 'allowed-once' };
-    if (policy === 'deny') {
-      const denial = permissionPolicyDenial(scope, payload.toolName);
-      const options = destination.threadId && destination.messageId
-        ? { threadId: destination.threadId, replyTo: destination.messageId }
-        : undefined;
-      try {
-        await deps.channel.sendMarkdown?.(
-          destination.chatId,
-          bilingualMarkdown(
-            `⛔ **权限策略拒绝**\n\n\`\`\`text\n${policyDenialText(denial)}\n\`\`\``,
-            `⛔ **Permission policy denial**\n\n\`\`\`text\n${policyDenialText(denial)}\n\`\`\``,
-          ),
-          options,
-        );
-      } catch (error) {
-        log.warn('approval-policy', 'deny-notice-failed', { scope, error });
-      }
-      return { ok: true, outcome: 'rejected', denial };
-    }
-    if (payload.lowRisk) return { ok: true, outcome: 'allowed-once' };
     const id = `approval-${randomUUID().replaceAll('-', '')}`;
     const request: ApprovalRequest = {
       id,
@@ -106,6 +88,8 @@ export function buildApprovalHandler(
     if (signal?.aborted) return { ok: false, error: 'approval cancelled' };
     const promise = deps.approvals.register(scope, request, payload.sessionId);
     let cardMessageId: string | undefined;
+    /** Whether the chat already holds this request's card (the ownership line). */
+    let delivered = false;
     const cancel = (): void => { deps.approvals.cancel(scope, id); };
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
@@ -126,6 +110,10 @@ export function buildApprovalHandler(
         }),
         options,
       );
+      // From here the chat has a live card: Feishu owns this request, and every
+      // result must say so. A cancelled answer still reports the ownership, so
+      // the mirror never hands a request whose card is gone to the desktop.
+      delivered = true;
       const cancelReminder = deps.onApprovalWaiting?.(scope, payload.toolName);
       let outcome: ApprovalOutcome;
       try {
@@ -135,10 +123,11 @@ export function buildApprovalHandler(
       }
       if (outcome === 'cancelled') {
         await settleCancelledCard(deps, destination.chatId, cardMessageId, options);
-        return { ok: false, error: 'approval cancelled' };
+        return { ok: true, owned: true, outcome: 'cancelled' };
       }
       return {
         ok: true,
+        owned: true,
         outcome,
         ...(outcome === 'rejected'
           ? { denial: toolApprovalDenial(payload.toolName) }
@@ -147,7 +136,11 @@ export function buildApprovalHandler(
     } catch (error) {
       log.fail('approval-card', error, { scope, sessionId: payload.sessionId });
       cancel();
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return {
+        ok: false,
+        ...(delivered ? { owned: true } : {}),
+        error: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       signal?.removeEventListener('abort', cancel);
     }

@@ -17,6 +17,7 @@ import {
   type SessionProjectionSource,
 } from './projection-protocol.js';
 import type {
+  FeishuConnectionMode,
   ProjectionSource,
   SessionProjectionBinding,
   SessionProjectionStore,
@@ -195,6 +196,7 @@ export class SessionProjectionBridge {
     prepared: PreparedSessionBinding;
     allowCrossScopeMigration?: boolean;
     expectedOwner?: { scope: string; workspaceCwd: string };
+    connectionMode?: FeishuConnectionMode;
     /**
      * Whether to post the prepared transcript into the chat. Default true, for
      * the disclosure-and-backfill flow. `/use` sets it false: an explicit
@@ -217,6 +219,7 @@ export class SessionProjectionBridge {
         ...(input.threadId ? { threadId: input.threadId } : {}),
         initialSeq: input.prepared.snapshotSeq,
         pendingInitialHistory: true,
+        connectionMode: input.connectionMode ?? 'full',
         ...(input.allowCrossScopeMigration ? { allowCrossScopeMigration: true } : {}),
         ...(input.expectedOwner ? { expectedOwner: input.expectedOwner } : {}),
       });
@@ -496,6 +499,7 @@ export class SessionProjectionBridge {
       });
       return;
     }
+    if (binding.connectionMode === 'half') return;
     const messageId = await this.sendCard(binding, renderProjectedMessageCard({
       role: 'user', source, content: text,
     }), `user:${dshMessageId ?? event.seq}`);
@@ -510,6 +514,7 @@ export class SessionProjectionBridge {
   }
 
   private async projectChunk(binding: SessionProjectionBinding, event: DshSessionEvent): Promise<void> {
+    if (binding.connectionMode === 'half') return;
     const data = isRecord(event.data) ? event.data : undefined;
     const chunk = isRecord(data?.chunk) ? data.chunk : undefined;
     if (chunk?.type !== 'text-delta' || typeof chunk.text !== 'string' || !chunk.text) return;
@@ -535,6 +540,7 @@ export class SessionProjectionBridge {
   }
 
   private async projectAssistant(binding: SessionProjectionBinding, event: DshSessionEvent): Promise<void> {
+    if (binding.connectionMode === 'half') return;
     const data = isRecord(event.data) ? event.data : undefined;
     const message = isRecord(data?.message) ? data.message : undefined;
     if (!isRecord(message?.source) || message.source.kind !== 'model') return;

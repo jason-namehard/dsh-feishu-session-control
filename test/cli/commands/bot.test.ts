@@ -70,6 +70,7 @@ describe('bot instance commands', () => {
     const deps = {
       env: {
         DSH_LARK_HOME: root,
+        DSH_LARK_ADAPTER: 'sdk',
         DSH_LARK_APP_ID: 'cli_primary',
         DSH_LARK_APP_SECRET: 'primary-secret',
       }, output: (text: string) => output.push(text),
@@ -78,7 +79,7 @@ describe('bot instance commands', () => {
 
     await runBotCommand('add', { name: 'reviewer' }, deps);
     expect(setup).toHaveBeenCalledWith({
-      profile: 'dsh-lark-reviewer', dshHome: join(root, 'bots', 'reviewer', 'dsh'), guardian: false,
+      profile: 'dsh-lark-reviewer', dshHome: join(root, 'bots', 'reviewer', 'dsh'),
     });
     expect(serviceEnvs[0]?.DSH_LARK_PROFILE).toBe('reviewer');
     expect(serviceEnvs[0]?.DSH_LARK_DSH_PROFILE).toBe('dsh-lark-reviewer');
@@ -112,7 +113,7 @@ describe('bot instance commands', () => {
     });
     const uninstall = vi.fn().mockResolvedValue({ ...running('dsh-lark-broken'), state: 'stopped' });
     await expect(runBotCommand('add', { name: 'broken' }, {
-      env: { DSH_LARK_HOME: root }, setup: vi.fn().mockResolvedValue(undefined), ensureProfile,
+      env: { DSH_LARK_HOME: root, DSH_LARK_ADAPTER: 'sdk' }, setup: vi.fn().mockResolvedValue(undefined), ensureProfile,
       waitForIdentity: vi.fn().mockResolvedValue(undefined),
       serviceFor: () => ({
         install: vi.fn().mockRejectedValue(new Error('service failed')),
@@ -136,7 +137,7 @@ describe('bot instance commands', () => {
     });
 
     await expect(runBotCommand('add', { name: 'reviewer' }, {
-      env: { DSH_LARK_HOME: root }, setup: vi.fn().mockResolvedValue(undefined), ensureProfile,
+      env: { DSH_LARK_HOME: root, DSH_LARK_ADAPTER: 'sdk' }, setup: vi.fn().mockResolvedValue(undefined), ensureProfile,
       serviceFor: () => ({
         install: vi.fn().mockResolvedValue(running('dsh-lark-reviewer')),
         status: vi.fn(), uninstall,

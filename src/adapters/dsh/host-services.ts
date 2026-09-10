@@ -57,14 +57,44 @@ export interface HostAgent {
   whenIdle(): Promise<void>;
 }
 
-/** One persisted session header as `sessionPersistence.list()` returns it. */
+/**
+ * One persisted session header as `sessionPersistence.list()` returns it.
+ *
+ * The delegation fields are written into the header itself, so a caller can
+ * tell a top-level conversation from an ephemeral child without reading a log.
+ */
 export interface HostSessionHeader {
   readonly id: HostSessionId;
   readonly cwd?: string;
   readonly title?: string;
   readonly updatedAt?: number;
   readonly createdAt?: number;
+  /** Session that delegated this one; absent for a top-level session. */
+  readonly parentSession?: string;
+  /** `'subagent'` for a delegated child; absent for a top-level session. */
+  readonly origin?: string;
+  /** Delegation depth: 0 for a top-level session, above 0 for a child. */
+  readonly delegationDepth?: number;
   readonly meta?: { readonly cwd?: string; readonly createdAt?: number; readonly title?: string };
+}
+
+/**
+ * Whether a persisted header describes a subagent (child) session.
+ *
+ * A delegated child carries `origin: 'subagent'`, a `parentSession` and a
+ * `delegationDepth` above zero; a top-level session has none of the three. The
+ * signal has to come from here: the id shape says nothing — historical
+ * top-level sessions exist whose ids are bare uuids rather than the current
+ * `session-<uuid>` form — and the Web session listing route carries no
+ * delegation metadata at all.
+ *
+ * @param header - one header as `sessionPersistence.list()` returns it.
+ * @returns true when the session is a delegated child.
+ */
+export function isSubagentSessionHeader(header: HostSessionHeader): boolean {
+  return header.origin === 'subagent' ||
+    header.parentSession !== undefined ||
+    (header.delegationDepth ?? 0) > 0;
 }
 
 /** One page of a session log, as `sessionPersistence.readFrom()` returns it. */
@@ -181,7 +211,7 @@ export function hostServicesAvailable(ctx: HostContextLike | undefined): boolean
 export interface HostFactories {
   createUserMessage(input: {
     content: ReadonlyArray<{ type: 'text'; text: string }>;
-    source: { kind: 'user' };
+    source: { kind: 'user'; client?: string; rpcId?: string };
   }): unknown;
   SessionId(id: string): HostSessionId;
 }
@@ -356,11 +386,11 @@ export class HostServices {
    * Build one identified user message through the host's own factory.
    * @param text - the user's prompt text, already stripped of bridge preamble.
    */
-  async userMessage(text: string): Promise<unknown> {
+  async userMessage(text: string, provenance?: { client: string; rpcId: string }): Promise<unknown> {
     const { createUserMessage } = await this.factories();
     return createUserMessage({
       content: [{ type: 'text', text }],
-      source: { kind: 'user' },
+      source: { kind: 'user', ...(provenance ?? {}) },
     });
   }
 

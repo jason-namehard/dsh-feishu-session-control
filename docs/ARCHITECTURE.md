@@ -1,455 +1,152 @@
-# 架构 · Architecture
+# 架构说明
 
-> 本文件描述 **DSH飞书Session控制** 的总体架构与分层设计，仍在演进中。
-> npm/DSH 兼容包名仍为 `dsh-lark-bot`。
-> This document describes the overall architecture and layering of dsh-lark-bot. Still evolving.
+本文描述 `dsh-feishu-session-control` 在 DSH `0.1.2-rc.1` 上的当前架构。最后核对日期：
+2026-09-09。
 
-## 分层 · Layering
+## 1. 设计边界
 
-```
-┌──────────────────────────────────────────┐
-│  dsh profile · cordis 组合                │
-│  · dsh-lark-bot/plugin（桥接引擎，进程内） │
-│  · dsh-lark-bot/notify（lark_notify 工具）│
-│  · dsh-lark-bot/file（lark_send_file 工具）│
-└──────────────────────────────────────────┘
-        │  以标准插件方式加载 | loaded as a standard plugin
-        ▼
-飞书 / Lark（私聊 · 群聊 · 话题；文档评论为规划中）
-        │  WebSocket 长连接（出站，免公网服务器 / 域名 / 内网穿透）
-        ▼
-┌──────────────────────────────────────────┐
-│  bridge/   飞书通道接入                    │
-│  · 消息事件、流式卡片、卡片交互、媒体下载    │
-│  · 出站 @ 提及 + 跨会话通知（lark_notify 工具）│
-│  · 当前会话结果文件上传（lark_send_file）     │
-└──────────────────────────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────────────┐
-│  session/  会话路由与持久化                │
-│  · chat / topic / member → scope key       │
-│  · 排队合并、scope 内并行 run、中断、访问控制 │
-│  · 保留窗口 + 归档（文件 / Git 仓库）        │
-└──────────────────────────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────────────┐
-│  workspace/  项目工作区管理（核心差异化）    │
-│  · git worktree / 分支隔离                 │
-│  · 项目级规则注入（AGENTS.md）               │
-│  · 上下文持久化 + 项目索引                  │
-└──────────────────────────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────────────┐
-│  adapters/  agent 后端适配层               │
-│  · dsh-web（本地 dsh Web agent，默认）       │
-│  · dsh-acp（ACP 审批通道，可选）            │
-│  · dsh-headless（legacy fallback）          │
-│  · dsh-sdk（官方 SDK client，可选）         │
-└──────────────────────────────────────────┘
-        │
-        ▼
-DeepSeek Harness (dsh) ──▶ DeepSeek V4 Pro / Flash
+系统遵循四条不可破坏的边界：
+
+1. Web 创建的 session 默认与飞书无关。
+2. 飞书只接收飞书发起回合的结果，除非用户显式切换到完整衔接。
+3. 插件不创造工具审批；只镜像 DSH 原生审批，Web 或飞书任一端批准即可。
+4. DSH 停止时飞书桥接同步停止；不存在 Guardian、离线接管或自动重启。
+
+## 2. 运行拓扑
+
+```text
+┌──────────────────────────── DSH host process ────────────────────────────┐
+│                                                                          │
+│  DSH Web/TUI ───────────────┐                                            │
+│                             ▼                                            │
+│                    HostDshAdapter / HostServices                         │
+│                             │                                            │
+│  Feishu WebSocket ──> channel/run-flow ──> native DSH session            │
+│           │                 │                     │                       │
+│           │                 ├─ session alias      ├─ DSH event stream     │
+│           │                 ├─ attachment mode    └─ native approval      │
+│           │                 └─ result delivery            │               │
+│           └───────────────────────────────────────────────┘               │
+│                                                                          │
+│  Integrated Web session manager: archive / recycle bin / purge / restore │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-`web` adapter 另有显式投影路径：飞书 `/session` 确认 → `SessionProjectionStore` 独占保存
-`scope + workspace → sessionId + cursor` → `session.history` 初始/重连补齐 → `/api/events.mux`
-实时事件 → transcript 卡与 bot-owned 实时卡。DSH append-only session log 始终是唯一真源；
-TUI/WebUI 的 active session 不参与 binding 决策。
+生产路径优先使用 `host` 进程内适配：桥接直接调用 DSH 宿主服务，不再依赖浏览器认证、回环 HTTP RPC
+或 `/api/events.mux` 的外部兼容面。`web` adapter 仍保留为兼容路径；`sdk`、`acp`、`headless` 用于独立
+运行时，不提供宿主 session 投影。
 
-会话别名由 `SessionAliasManager` 单独持久化到默认工作区的
-`.session_aliases.json`，只保存 `MMDD-N → native sessionId` 映射。`/sessions` 会以
-`session.list` 同步并清除已在 WebUI 删除的陈旧映射；`/new` 创建 Web session 后注册别名；
-`/use` 复用既有显式绑定确认流程。`/delete` 先发 owner-bound、一次性、十分钟过期的飞书确认卡，
-确认后通过本机 Web host 的 `/__chameleon/session/delete` 将会话移入可恢复回收站，再清理 bridge 的
-兼容 binding 与 projection binding，但保留别名。`/purge` 使用同样的确认机制，通过
-`/__chameleon/session/purge` 从回收站永久清理会话并移除别名。删除不会重排其他别名，也不需要公网
-HTTP 入口。
+## 3. 入站消息
 
-```
-┌──────────────────────────────────────────┐
-│  guardian/（可选 · 独立于 dsh 的进程）      │
-│  · 心跳看门狗（读 bridge 心跳 + ps 观察）  │
-│  · dsh 下线后接管飞书通道，接收 /safemode  │
-│  · 仅核心安全 profile（SDK 流式优先，      │
-│    headless 回退，均无第三方插件）         │
-│  · 受限对话自愈 + 退出重启完整 profile      │
-└──────────────────────────────────────────┘
-```
+飞书消息经 `src/bridge/channel.ts` 完成鉴权、群聊隔离、命令识别和卡片回调路由；普通消息进入
+`src/bridge/run-flow.ts`。
 
-```
-┌──────────────────────────────────────────┐
-│  dsh profile（cordis 组合）                │
-│  · dsh-lark-bot/plugin  桥接引擎（进程内） │
-│  · dsh-lark-bot/notify  lark_notify 工具  │
-│  · dsh-lark-bot/file  lark_send_file 工具 │
-│  · @deepseek-ai/dsh-base …               │
-└──────────────────────────────────────────┘
-```
+普通消息第一次进入某个 scope 时：
 
-本项目以 **dsh 标准 profile bundle** 交付：`dsh plugin add dsh-lark-bot`（或一行
-`dsh-lark-bot setup`）把包装进 profile，dsh 启动时以标准插件方式加载
-`dsh-lark-bot/plugin` —— 桥接引擎**在 dsh 进程内**运行（飞书 WebSocket 通道、会话/工作区、
-卡片、通知回调），并按需拉起官方 dsh SDK runtime 子进程执行 agent 任务。可选 `src/service/`
-把这同一个 dsh profile 交给 OS 用户服务常驻，不产生第二套桥接引擎；默认安装的「安全网守护」
-是唯一独立于 dsh 的救援进程（见关键决策 8）。
-首次启动无凭据时打印二维码完成一次性绑定。
+1. 解析当前工作空间；
+2. 创建或取得该 scope 的 DSH session；
+3. `SessionProjectionController.connectFeishuTurn()` 以半衔接连接该 session；
+4. 记录本次 DSH RPC 与飞书消息 ID 的相关性；
+5. 运行任务并只把该飞书发起回合的结果返回原聊天。
 
-## 关键决策 · Key Decisions
+系统只处理飞书推送的新消息事件。群历史轮询仅是旧权限环境的兼容兜底；取得
+`im:message.group_msg` 后应把 `DSH_LARK_GROUP_POLL_MS` 设为 `0`，避免重复 API 调用。
 
-1. **飞书通道与 scope 隔离**：采用 `@larksuite/channel`（WebSocket 长连接 + PersonalAgent 应用），并开启 `resolveChatMode`。`IsolationStore`（`<profile>/isolation.json`）按 chat 持久化 `group|topic|member` 策略，默认 `topic` 保持原有普通群/话题行为；成员模式生成 `<chat>:member:<open_id>`。消息入队时即固化 scope，owner 从该 scope 还原；运行 / 审批 / 问答 card action 携带创建时 scope，member action 还要求 operator `open_id` 与 owner 一致，`/stop` 遍历当前操作者可达的 group / topic / member scopes，因此切换策略不会孤立旧运行或越权操作其他成员会话。任务卡显示 owner。问答卡发送后，`QuestionRegistry` 在内存中绑定 card messageId 与创建时 scope/question id；runtime 问题再绑定 native session，使并发 run 只清理/暂停自己的问题。输入消息回复该卡时优先作为自由文本答案；topic 卡以 `ScopeDirectory` 最近入站 messageId 作为 reply anchor。群聊 mention gate 在 bridge 匹配回复后执行：普通消息仍须 @（或显式 no-at 模式），只有 pending 问答卡 reply 可免 @；topic 必须匹配原 thread，member 必须匹配 owner。切换只影响后续路由，不迁移或删除旧 scope 数据。PersonalAgent 群事件默认只处理 @ 消息和 pending 问答卡回复；可通过 `DSH_LARK_GROUP_NO_AT=true` 显式启用历史 API 增量轮询及实时无 @ 消息；两条 no-at 路径都校验当前 `allowedUsers` / `allowedChats`。轮询仅面向 `ScopeDirectory` 已登记的 group/topic，以 per-chat 水位和跨实时/轮询 message ID claim 去重，经过与实时事件相同的白名单、freshness、bot/system/deleted 过滤及消息处理管线；进程启动时间作为初始水位，不回放历史积压。该模式要求非空显式用户白名单与 `im:message.group_msg` 权限，并由 `doctor` 做 best-effort 实际权限探测。
-2. **agent 后端解耦**：通过 adapter 接口抽象，`dsh` 为默认后端。默认走官方
-   `@deepseek-ai/dsh-sdk-client`（`dsh-sdk-jsonrpc-server` runtime，原生 session + 流式事件）；
-   `DSH_LARK_ADAPTER=acp` 走官方 `@deepseek-ai/dsh-acp`（审批卡）；`headless` 保留 legacy fallback；
-   `DSH_LARK_ADAPTER=web` 走本地 dsh web agent（`session.prompt` + `/api/events.mux`，单写者，根治双写）。
-   `web` adapter 声明 `resumeCapable = true` 并实现 `canResume`（web 服务端是每个 session 的单写者，
-   跨连接持留），因此 run-flow 会复用同一 native session，前一轮记忆得以延续；adapter 被 dispose 后
-   才拒绝复用，其余情况交给 run-flow 的 fresh-session 兜底。
-   桥接核心只依赖 `AgentAdapter` / `AgentEvent` 契约；dsh 协议漂移集中在
-   `src/adapters/dsh/`，宿主工具 registry 漂移集中在 `src/notify/` 的 raw-schema 注册边界。
-   当前兼容基线为 rc.8；托管 SDK/ACP profile 的 ready 判定读取实际 package manifest 并
-   核对精确版本，旧 profile 进入幂等重装。入站图片按 magic bytes 识别格式；ACP 使用
-   capability-gated 原生 image block，默认 SDK profile 则以桥接扩展的 `attachment/upload` 调用
-   dsh 自带 attachment store 完成校验与持久化，再把 durable ref 作为原生 image block 发送。
-   上游 attachment store 默认以 `maxImageDimension=2000` 拒绝长边超限图片（`IMAGE_DIMENSION_TOO_LARGE`），
-   因此入站图片在 `prepareAttachments` 阶段由 `src/media/image-scale.ts` 用 sharp 做**等比例缩小**
-   （可选依赖、动态加载；缺失或失败则原样放行、不引入硬失败），上限默认 2000 且可用
-   `DSH_LARK_IMAGE_MAX_DIMENSION` 调整（设 0 关闭缩放）。这既避免把竖版截图当成“模型不能看图”，
-   也不触及宿主 store 自身的准入限制。
-   图片从不退化为路径文本，也不得用工作区其他文件替代；安全模式仍装配未扩展的官方 SDK server。
-   出站图片在 channel 增加二进制能力前输出明确降级提示。
-   SDK rc.8 没有 per-session cancel，adapter 因此以 `scope + workspace` 建立 runtime 取消域，
-   同一 scope 的并发 fresh session 另开 runtime；run handle 捕获并只关闭自己的 entry。原生 resume
-   还必须通过 adapter 的 live-owner 检查：只有当前进程仍持有同 runtime/session/route 时复用 ID；
-   重启、停止或 route 重建后改用 fresh session + bridge transcript，避免上游新 live seed 与旧 JSONL
-   不匹配产生 `id collision`。只有会话分类器确认的零活动 collision/corruption 才进入恢复重试；同一
-   位置出现的模型、provider 或传输错误按普通 failed 事件原位终结过程卡，不清除 native binding。
-3. **工作区管理**：会话绑定 git worktree / 分支 + 项目级规则注入 + 上下文持久化，是本项目的核心差异化能力。
-   `SessionStore` schema 2 在同一 `sessions.json` 中按 scope + canonical workspace cwd 分别保存
-   transcript、native binding 与 metrics；schema 1 在启动时按 `WorkspaceStore` 当前选择迁移。消息入队
-   时固化 workspace，切换期间不会把旧任务重路由。`/cd` / `/ws use` 中断原 workspace 的 active run，
-   但保留其 session / transcript / metrics / archive，A → B → A 恢复 A；`/new` / `/reset` 只清当前
-   workspace。Git worktree 由 scope + base path hash 派生，同 scope 的不同项目不共用目录；schema 1
-   迁移先从旧 scope-only worktree 的 Git registry 解析 owning repo，把 session 与旧 retention archive
-   header 归回真实项目（逐文件原子、半完成可识别并在下次启动幂等重试，归档仓库留下 migration
-   commit）；全部成功后才持久化 session schema 2。请求项目
-   匹配 owner 时才 `git worktree move` 原位迁移；不匹配则保留旧树并为当前项目建新树。run-flow 只接收 adapter 翻译出的真实 `usage` /
-   `context_usage` 事件并累计，不从文本长度推算。累计 token 归属 workspace，最近 context 快照按
-   workspace、native session 与 canonical provider/model 分别保存；`/status` 的 run / pending 和
-   `/archive list|clean` 都只展示或操作当前 workspace，并发 run 不互相覆盖。
-   `/status` 的纯 renderer 从 stores/registries 组装可刷新卡；refresh action
-   固化 scope，并复用 member owner 授权后通过消息 `messageId` 原位更新。
-   `JobLedger`（`<profile>/jobs.json`，schema 1）以飞书 messageId 为 receipt key：bridge 先原子落盘
-   最小消息/routing/workspace 快照再交给 `PendingQueue`，run-flow 只回报 starting/thinking/tool-name/
-   responding/finalizing 等安全 checkpoint。启动且出站通道 ready 后自动重放 queued；遗留 running
-   在 outbound ready 后转为 interrupted，并通过持久待通知标记投递原 chat/thread；发送失败会跨启动重试，
-   且必须由 `/jobs retry` 显式重跑以避免重复外部副作用。
-   账本按 scope + workspace 查询、终态最多保留 500 条；重连只对账已收妥事件，不能补造平台未投递事件。
-   启动恢复集在 channel connect 前冻结，避免 live/replay 双重入队；首次、dispatch receipt 或终态
-   落盘失败均向原会话显式告警。dispatch receipt 失败时不执行并明确落 failed/保留 queued；终态失败的
-   running receipt 留待下次启动转 interrupted，队列锁仍保证释放。
-4. **模型 / provider / 凭据管理**：`/model` `/providers` `/provider` `/key` 命令直接读写
-   dsh 官方配置存储（`~/.dsh/settings.yaml` + `~/.dsh/.credentials.yaml`），与 dsh Web
-   Settings→Models 同一协议（`patchNode` 叶子 diff、`<file>.lock` 写锁、原子替换、0600 凭据文件），
-   因此不重复造配置管理 API，也不绕过官方热发布；ACP / SDK 协议本身不含配置管理方法，
-   模型切换通过每轮请求的 provider/model 路由与 dsh 热发布生效：桥接在每轮运行前调用
-   `DshProviderManager.resolveRuntimeModelRoute()` 把模型解析为「provider + model」，并在运行前
-   把选中的 DeepSeek 视觉模型以 `text,image` 幂等写入上游实际消费的 model catalog；这一步与
-   settings 的其他写入共用文件锁和原子 patch，避免只在 bridge 展示层补能力而 runtime 仍按 text-only
-   拒绝图片。SDK 适配器在
-   路由变化时关闭旧 runtime 并以新路由重建（`/model use` 下一轮真正生效）；`agent-default-model`
-   按 dsh 官方 schema 写入 `{ provider, model }` 双字段。管理入口的主卡直接列出模型并以
-   `provider/model` 路由执行 per-scope 热切换、标记按「scope > role > profile > dsh > env」
-   解析出的实际当前模型，且始终提供“恢复默认”；增删 provider / 模型 / 凭据等写操作继续使用
-   BotFather 式交互卡片多轮向导（`src/commands/config-wizard.ts` + `src/card/config-cards.ts`，
-   `src/bot/wizard-store.ts` 持有 per-scope 向导状态）。卡片全部使用 schema 2.0：
-   按钮直接放 `body.elements`（横排用 `column_set` 自动宽列，兼容飞书 2.0 对旧
-   `action` 容器的拒绝），需要文本/选择输入时以 `form` 容器包住组件与提交按钮，
-   回调经 `action.form_value` 取输入值。
-   SDK / ACP managed runtime 在 profile provision 之前还会调用统一的 `resolveAdapterRoute()`：完整显式
-   route 直接使用；空 route 回退到 dsh 对象形式 `agent-default-model`；只有单边字段时必须能与模型目录
-   或默认 route 一致，否则在本项目边界给出配置错误，绝不把空 provider 交给上游。doctor 与真实 bridge
-   复用同一 adapter 工厂。模型选择把空白 preference（新装默认 `""`）视为未设置，回落到
-    `DSH_LARK_MODEL`（issue #112 Bug C），避免空 `AgentOptions.model` 令 agent 启动失败。
-    OS service 重建 env snapshot 时先读取现有 0600 env 文件，再以当前 shell 的
-   已定义受管键覆盖，防止普通 restart 删除此前保存的 provider/model 或实例设置。
-   dsh Web 的通用 bridge 设置走官方 settings 扩展契约：Host `src/plugin.ts` 以
-   `@deepseek-ai/dsh-settings` 注册 `dsh-lark-bot` namespace 与 Schemastery schema，先把
-   `ConfigStore` 中扫码绑定后实际生效的 profile 合入 composition base；`appSecret` 使用
-   `role('secret')`，wire describe 不返回值。包内 `src/client/` 构建为 loader 的 lazy-CJS
-   `dist/client.js`，通过 `dsh.client` 注入官方 `settings.plugin.item`，因此无需改动 dsh Web。
-   scope watcher 将凭据/区域/workspace/adapter 等连接配置串行执行 `service.stop → service.start`，
-   旧 generation 完整清理后才启动新配置；模型、并行数与默认提醒通过 `updateSafeSettings` 热更新，
-   只影响后续任务/提醒而不终止 active run。settings provider 缺失时回退 composition config。scope
-   自己的 `/concurrency` / `/notifications` 覆盖仍优先。
-   所有 Card JSON 2.0 按钮由 `localizedCard` 统一输出 `behaviors.callback`，表单提交按钮另保留
-   `form_action_type=submit`。扫码注册通过 PersonalAgent `addons.callbacks` 显式申请
-   `card.action.trigger`；仅建立 WebSocket
-   连接不能证明卡片回调已启用。计划、审批与问答 action 入站时记录不含表单正文的结构化审计日志，
-   先结算 registry 中的业务结果，再以“原生 toast + 终态确认消息 + 撤回原内联卡片”
-   完成 UI 收尾；toast 立即返回，确认消息保持原话题上下文，确认/撤回均为 best-effort 异步任务，
-   失败只记录结构化日志，不能阻塞 agent 继续运行；registry 已结算或不存在时返回明确 stale toast，
-   不允许静默空响应。本地 `/ask`、`/plan`、`/approval` 等待响应以合法 JSON 前导空白定期保活，
-   避免 Node/Undici 的 300 秒 headers/body inactivity timeout 取消仍在等待用户的卡片。
-    运行过程卡不使用 `@larksuite/channel` 的 whole-card timer controller：其 timer 不观察异步
-    `patchCard` rejection，弱网超时会升级为进程级 unhandled rejection。`adaptLarkChannel` 自己按
-    100 ms 合并并串行更新；re-anchor 的撤回/重建与 patch 同样在控制器内串行，并发 re-anchor 合并为
-    一次，因此 patch 不会命中已经撤回的旧 message ID。patch 失败会有限重试；若飞书返回
-    `230011 / message withdrawn`（目标消息已被撤回/替换/清除，属正常可恢复状态），控制器识别该
-    分类并按最新快照在会话尾部**重建**卡片、重定向到新 `message_id` 后继续流式更新（有恢复预算防
-    无限重建），不弹“更新失败”提示。仅当真正不可恢复的失败（网络/超时且重试仍失败）时才记录脱敏
-    日志、冻结该卡并发送普通降级提示；无论哪种情况 producer、Agent 与单独的最终 Markdown 均继续运行。
-   **过程卡跟随会话末尾**：飞书不能重排已存在消息，运行中 agent 发出的中间气泡（`lark_notify`、
-   问答/计划/审批卡等）会被追加到会话底部，而只做原位更新的过程卡停留在顶部，用户查看新气泡后需
-   上滑才能确认任务仍在继续。为此 `run-flow` 把过程卡的流式控制器注册进 `RunCardAnchors`，
-   `attachRunCardAnchors` 包装统一发送漏斗（`streaming` 通道的 markdown/card/file 发送），在每次
-   中间气泡成功送达后触发 `reanchor()`：先 best-effort 撤回原卡，再以顶层消息在会话末尾重建同内容卡，
-   并把控制器重定向到新 `message_id`，后续 patch 全部落到新卡；召回失败则保持原卡不重复建卡。
-   仅在 `state.terminal === 'running'` 时触发，因此最终回答（在 finalize 之后发送）不会把卡拽到其下方。
-   **运行时流式文本气泡（issue #95）**：`run-flow::consume` 把连续的 `text` delta 折叠为一条“逻辑消息”，
-   在消息边界（`tool_use` / `tool_result` / `thinking`，或 `final_text` 覆盖缓冲）或流停顿超过
-   `INTERIM_BUBBLE_PAUSE_MS`（默认 1200 ms，可用 `interimDebounceMs` 覆盖）时，将该段文本以独立的
-   Feishu 气泡经 `channel.sendMarkdown` 实时下发，而不是等到任务收尾一次性合并发送。已下发内容由
-   `delivered` 前缀跟踪，收尾的最终回答只发送“尚未下发”的尾部（`assistantOutput.slice(delivered.length)`），
-   因此中间气泡与最终回答各自独立、绝不重复：一次 agent 文本输出 = 一条独立 Feishu 消息气泡。每个中间
-   气泡下发后都会经 `RunCardAnchors` 把过程卡重锚到会话末尾；`final_text` 是所在段的完整正文，会清空
-   缓冲并仅经最终剩余尾部下发一次，避免重复。一旦 `state.terminal !== 'running'`（错误 / 中断 / 收尾），
-   停顿冲刷即失效，杜绝在最终回答之后出现游离气泡。
-   **任务执行模式**由 `ExecutionModeStore` 在 profile 的 `execution-modes.json` 以 0600 原子写入，按 immutable scope 保存 `quick|balanced|deep`。`/mode`/`/effort` 与卡片回调写入时复检当前 scope/操作者，`/status` 读取有效值。队列开始新 run 时取一次快照，并由 `run-flow` 注入统一模式前置指令，因此 SDK、ACP、Web 行为一致；运行中的任务不被切换打断，安全、工具权限与计划门禁也不因模式降低。
-   managed runtime persona 还要求 Git 写入前读取目标仓库适用的 `AGENTS.md`、检查状态并仅暂存明确审查过的路径，禁止 `git add .` / `git add -A`。
-5. **bot UI 国际化 seam**：`src/card/i18n.ts` 把中文与英文 variant 组合为同一 Card JSON 2.0
-   payload（`config.locales/use_custom_translation` + 每个文本组件的 `i18n_content.zh_cn/en_us`），并在出站前校验两种语言的 button
-   callback value 完全一致。运行、状态、工作区、配置、审批、计划与问答卡只本地化固定 chrome，
-   动态 agent / 用户 / 工具内容在两种 variant 中原样复用。标准化入站事件不含每位读者 locale，
-   因此 Markdown、toast 与兼容降级使用中英并列，不保存或推断个人语言。
-6. **多角色 Agent**：`RoleStore`（`<profile>/roles.json`）定义命名角色（persona / 模型 /
-   工具指引 / 角色规则）并按 scope 绑定；运行期角色指令作为 prompt 前缀注入，角色模型参与
-   模型优先级（每会话 `/model use` > 角色 > profile > dsh 默认 > 环境），因此角色切换无需
-   重启 runtime，也能与 scope 内并行 run 共存。
-7. **多机器人实例与可信交接（issue #25）**：每个实例拥有独立 bridge profile、dsh profile、
-   `~/.dsh-lark/bots/<name>/dsh` DSH_HOME、
-   PersonalAgent 身份、用户服务与凭据快照，因此模型、session、scope、worktree 和 archive 不共享。
-   `BotFleetStore` 只在全局 `fleet.json` 保存实例元数据与已验证 bot `open_id`，不保存密钥；
-   `BotHandoffGuard` 以跨进程锁维护 `handoffs.json`，对同一 chat 的可信 bot 连续交接精确计数并按
-   messageId 去重，真人新消息会重置计数。只有飞书事件确认为 bot、真实 @ 当前 bot 且 sender
-   `open_id` 匹配已登记启用实例时才进入交接；未知 bot、系统消息和匿名事件 fail closed。
-   运行 prompt 只注入已登记 peer 的精确名称/open_id，交接复用 `lark_notify`。机器人在 member
-   隔离群中的交接降级到 group/topic scope，避免创建无人可操作的 bot-owned 决策卡。
-   附加实例的 adapter 限定为 `sdk` / `acp` / legacy `headless`；`web` 的共享广播流无法按实例
-   隔离 session，因此创建和运行时均 fail closed。
-8. **通知与人机决策回调**：bridge 出站契约支持 `mentions` 与跨 chat/thread 发送；`ScopeDirectory`
-   持久化 scope → chat/thread/最近入站 messageId 映射（messageId 用于 topic reply anchor）；`NotifyServer` 在 127.0.0.1 提供带 token 鉴权的回调，
-   SDK / ACP runtime 装配 `lark_notify` 工具（`dsh-lark-bot/notify`），agent 可主动 @ 提及
-   并向其他会话推送汇报；本地回环 + 每启动随机 token，不暴露公网。
-   `lark_send_file` 经同一回环服务按 native session 固定回原 chat/thread；bridge 只读取当前
-   workspace、该 scope 的实际 worktree/归档和实例日志中的 realpath 普通文件；no-follow 打开后
-   在同一文件句柄复核身份并以 20 MiB 上限有界读取，因此 runtime 自报 cwd、symlink 或并发替换
-   不能越权。`/archive` 落盘后复用该二进制上传能力，失败可按 id
-   重发；管理员可把当前 scope + workspace 的归档转发到 `ScopeDirectory` 已登记的指定会话。
-   `lark_notify` / `lark_send_file` / `lark_ask_user` / `lark_request_plan_approval` 以宿主支持的 raw JSON Schema
-   definition 注册，不运行时导入 `dsh-tools`，避免插件与宿主各自持有 scheduler Symbol 的双实例故障。
-   渠道 skill 同理以 `dsh-lark-bot/skill` 子入口挂进 SDK / ACP runtime overlay（`inject: ['skills']`），
-   使模型的 `skill` 工具能在 agent 会话自己的 `ctx.skills` 注册表里读到 `dsh-lark-bot` 操作指南；
-   bridge 引擎（`dsh-lark` profile）虽也注册同名 skill，但那是另一条 cordis 上下文，模型并不会读取。
-   `/ask`、`/plan`、需要用户决策的 `/approval` 在鉴权和参数校验通过后立即 flush JSON 响应头，并在人工等待期间发送
-   JSON 合法空白心跳；这同时避开 Node/Undici 默认 300 秒 headers/body idle timeout。连接真正断开时
-   AbortSignal 仍精确取消该 session/id 的 pending 项，而不会靠 agent 重试生成重复卡。
-   计划工具通过同一 server 的 `/plan` 端点以 session 反查 immutable scope：完整计划先作为普通
-   Markdown 消息发送，再由 `PlanApprovalRegistry` + schema 2.0 form card 等待 approve/revise 与
-   可选 feedback；工具返回后原 agent turn 自动续跑，等待期间 idle watchdog 仅为所属 session 暂停。
-   `policyCheckOnly` 则是同步协议分支，直接返回合法 `ask|allow|deny`，不要求 outcome、不卡片、不进入
-   heartbeat 人类等待。兼容探针把 policy preflight、low-risk allow 与真正的一次性审批分开记录，
-   快速契约测试直接对照生产 handler 的响应；Release 上传包前必须再次通过完整真实探针。
-   `tools/pre-execute` 先经鉴权回环取得 immutable scope 的 permission policy，再判断计划门：`deny`
-   在任何快速通道前终止，`ask` 的低风险调用静默放行，高风险调用在计划确认后进入一次性审批，
-   `allow` 仅自动通过逐工具审批。随后计划门会拒绝当前 turn 尚未批准的 mutating/execute/`run_code`
-   调用；`bash` / `shell` 快速通道只保留无路径自省命令与受限仓库内只读 Git 子命令，文件内容读取、
-   路径枚举、外部路径与控制语法一律保持高风险；SDK 附带的
-   `description` / `workdir` / false background 元数据经显式校验后不改变判定，未知参数、串联、
-   重定向、命令替换、未知程序与所有其他终端调用保持 fail closed。run 或 HTTP request
-   取消时精确撤销并终态化该 session 的卡，因此 SDK、ACP、Web 宿主路径都不是仅靠提示词约束。
-   `src/policy/tool-policy.ts` 是插件策略的单一判定/文案来源：计划门与逐工具审批共用高风险分类器，
-   runtime persona 从同一只读命令集合生成，并禁止拒绝后换用等价命令/工具/路径；拒绝统一携带 `[policy-denial layer=...]`、reason 与
-   to-change。计划门负责意图确认，`/permission` 负责逐工具决策，二者不互相冒充；Harness
-   `[sandbox: ...]` 作为上游 `file-sandbox` 层被明确识别但不由插件越权改写。
-   默认 SDK 与 host bundle 还装配 `dsh-lark-bot/approval`：它先以 `tools/pre-execute` 强制拦截
-   高风险工具，再以 structural listener 接入 rc.8
-   `approval/request` waterfall，经 `/approval` 路由到 scope/session 精确的 `ApprovalRegistry`；
-   ACP 保留协议原生 `session/request_permission`，避免双 answerer；若底层工具在 pre-execute 放行后
-   继续询问官方 seam，同一 in-flight grant 被复用，不重复弹卡。逐工具等待同样只暂停所属 run。
-   `PermissionPolicyStore`（`<profile>/permission-policies.json`，0600）由 `/approval` 的 policy-only
-   预检与实际审批共享，按 immutable scope 统一执行 `ask/allow/deny`；默认 ask，管理员通过 `/permission` 修改，member
-   隔离下可显式指定同一 chat 内目标 scope（跨 chat fail closed）；持久写成功后才回执，失败回滚。
-   deny 返回 structured denial 并显式通知，且优先于计划门；自动放行逐工具审批仍不能跳过关键任务
-   计划门禁。即使 `DSH_LARK_PLAN_GATE=off`，scope policy 预检仍生效；legacy headless 因无工具回调不在保证范围。
-   `NotificationPreferenceStore`（`<profile>/notification-preferences.json`，0600，schema 2）按 immutable scope
-   保存事件/目标/@/审批延迟或相对 Web default 的显式关闭；无 override 时继承 profile 的
-   `notificationDefault`。`NotificationDispatcher` 只在 durable job 终态落盘后发送
-   完成/失败提醒，并为 SDK/Web `/approval` 与 ACP permission 创建一次性 timer，结算即清除。
-   当前目标允许普通用户 opt-in；跨会话仅管理员且目标必须已登记。发送失败不污染任务终态。
-   `ReplyPolicyStore`（`<profile>/reply-policies.json`，0600）按 scope 保存默认关闭的合并窗口、每批任务
-   上限、批次间隔与近似去重窗口；profile 管理员或当前群的群主/群管理员可用 `/replies` 修改，
-   群角色由 Feishu/Lark chat API 实时校验并失败关闭，`/status` 可见。入站近似去重复用 durable
-   `JobLedger` 的同 sender + scope + workspace 近期记录；出站 `ReplyDispatcher` 位于 run-flow 最终回答
-   seam，默认透传，启用后合并同 scope 答案并把超限项留队按间隔继续交付。交互卡、错误与中断提示
-   不经该队列，避免阻塞人机决策。
-9. **唯一运行时、可选 OS 托管（issue #23）**：不做「独立 bridge 服务 vs dsh 插件」双路径。产品形态收敛为
-   dsh profile bundle：`dsh-lark-bot setup --profile <name>`（内部自动处理 pnpm 构建策略并
-   执行标准 `dsh plugin add`）→ `dsh --profile <name>` → 首次扫码。CLI 仅保留 `setup` /
-   `doctor` / `upgrade` / 隐藏 `run`，并提供 `service install|start|status|logs|restart|stop|uninstall`
-   把标准 `dsh --profile` 交给 systemd user / LaunchAgent / Windows 计划任务（Linux 无 user systemd
-   时用 XDG supervisor）。原生入口启动 profile 内稳定 CLI runner，由其读取 0600 环境快照，避免
-   plist / 计划任务泄露密钥（Windows 另以 owner-only ACL 收紧 env）。guardian 自动重启和 `upgrade --restart` 优先操作该受管服务，避免双实例。
-   环境快照排除 bridge callback URL/token、测试开关和 update-worker 标记；飞书内更新重启时沿用
-   既有稳定 PATH，避免 npx 私有 cache 路径污染后续服务。Guardian systemd unit 显式携带 Node
-   所在目录及安装时的稳定用户/系统 PATH，并过滤 `_npx`、update-worker npm cache 与所有
-   `node_modules/.bin` 条目，以保证安全模式可调用同工具链中的 pnpm且不依赖临时缓存。
+## 4. Session 连接模型
 
-    环境快照与 Guardian systemd unit 共用同一个 `sanitizeServicePath()`（issue #111）：同样过滤 `_npx`/`node_modules/.bin` 条目、去重并前置 Node 所在目录，避免托管服务把 npx/cwd-walk 的临时插件版本钉进服务 env。`service install/start` 检测到未受管的同 profile 进程时，若其父进程是 resident guardian 则自动接管停止（issue #112 Bug D），而非报“请先原终端停止”造成死锁。
-   portable supervisor 在 spawn 后、任何异步状态落盘之前即订阅 child 的 `exit/error`，因此停止信号与
-   状态写入并发时不会丢失一次性退出事件或永久挂起；该顺序由受控时钟竞态测试锁定。
-   `service/<profile>.intent.json` 持久化 running/stopped 意图，stop/uninstall 后 guardian 不回拉；
-   生命周期目录锁串行化 mutation，install/start 会拒绝已存在的未受管同 profile 进程；仅当该进程由 resident guardian 派生时才自动接管（issue #112 Bug D）。
-   WebSocket 在机器睡眠 / 断网期间无法收消息；恢复后仅向最近活跃 destination 发恢复通知。
-10. **一键彻底升级（issue #10）**：`dsh-lark-bot upgrade` 从任意旧版本（含 0.7.0 前遗留形态）
-   一条命令完成 包本体（`dsh plugin add <name>@<latest>`）→ guardian 幂等重装并重启 →
-   runtime profile（dsh-lark-sdk / dsh-lark-acp）own-package 链接修复，以及 runtime profile 与被链接
-   主插件依赖树中陈旧/物理损坏上游依赖的强制刷新；managed overlay 的 bridge 工具行按已安装（回滚目标）
-    包实际导出的 subpath 生成，只引用其真正导出的 `notify`/`file`/`secret`/`ask`/`plan`/`approval`/
-    `skill`/`sdk-server`，`./sdk-server` 缺失时回退官方 server，因此回滚到更旧版本不会产生
-    `ERR_PACKAGE_PATH_NOT_EXPORTED`
-    → `doctor` 升级后验证；
-   运行中实例默认只提示重启命令（不中断会话 / 配置 / 凭据），`--restart` 可选自动重启，
-   `--rollback` 按 `~/.dsh-lark/upgrade-state.json` 记录精确回滚。旧版本（无 upgrade 命令）
-   通过 `npx dsh-lark-bot@latest upgrade` 引导：npx 拉取最新版执行升级。
-   飞书内 `/upgrade` 在同一升级链前增加管理员与 owner-bound 确认卡：`ChannelUpdateController`
-   只生成十分钟有效的一次性 offer，确认后把精确 npm 版本与原 chat/thread 路由以 0600 状态交给
-   `GuardianUpdateHandoff`。独立 worker 运行最新版 CLI 的 `upgrade --restart`，因此可以跨越 bridge
-   自身和 guardian/profile 重启；新 bridge 仅在通道、callback server 和 heartbeat 全部就绪后，
-   才按实际运行版本协调可能被 service cgroup 重启中断的 worker，并只向原会话交付一次终态。
-   worker 在 0700 中立 cwd 中运行、使用按请求哈希隔离的 0700
-   npm cache 和显式 0077 子进程 umask，不信任 bridge cwd、`~/.npm` 或宿主 umask；失败只跨边界传递
-   脱敏错误类别，不传原始输出。`/new` / `/reset` 每次强制一次 best-effort npm 查询，只有
-   严格更新时追加短文本，不改变建会话结果。
-   `dsh plugin add` 后升级器重新读取 profile 内包清单并校验精确目标版本，再把该稳定安装根传给
-   SDK/ACP runtime repair；运行于 npm/npx 扁平树的 worker 只负责执行，不会成为 runtime 链接目标，
-   其依赖就绪性按 Node 从 worker package 实际解析到的模块入口与清单判断；pnpm profile 中的包
-   入口先解引用为 `.pnpm` 物理目标，使 Node 能从物理包目录旁的依赖链接解析，而不是从逻辑
-   `node_modules/<package>` 路径误判依赖缺失。
-   在进入 `dsh plugin add` 前，既有 profile 的 `.modules.yaml` 所记录的精确 pnpm 版本会同步到
-   profile `package.json#packageManager`。因此即使 dsh 由源码仓库或 Corepack 特殊托管，裸
-   `pnpm` 仍使用创建现有依赖树的版本，不会跨 store 主版本；无安装元数据的新 profile 保持由 dsh
-   首次初始化。
-11. **安全网守护（issue #6）**：dsh 采用「一切皆插件」架构，任一第三方插件都可能让整个组合
-   boot 失败，导致桥接引擎与 dsh 一起下线。因此在插件托管架构之外，额外提供**独立于 dsh
-   进程的最小「安全网守护」**：桥接引擎周期写入心跳文件（`<bridge-profile>/guardian/
-   heartbeat.json`），守护仅在本次守护进程运行期间观察到 dsh 在线、随后心跳过期 / 无 dsh 进程时接管飞书长连接
-   （同 app 单长连接约束：dsh 在线时守护必须静默，绝不抢占通道）。心跳在 `{pid, startedAt, ts}` 之外还携带
-    **channel readiness 快照**（`state/generation/reconnectAttempts/lastInboundAt/
-    lastReconnectAt/lastError`），让 `service status`、`doctor`、`guardian status` 区分「引擎进程活着」
-    与「飞书通道可用」；长连接默认启用 SDK `wsConfig.pingTimeout` 与应用层 `keepalive` 看门狗，
-    半开连接（TCP 仍 ESTABLISHED 但飞书不再投递）被识别后强制重连新 WS generation，`onUnrecoverable`
-    时引擎以非零状态退出、交由受管 service / guardian 重启。`/safemode` 进入仅核心
-   安全模式：优先预置 `~/.dsh/profiles/<profile>-safe-sdk`（官方 `dsh-base` +
-   `dsh-sdk-jsonrpc-server`，无第三方插件）以获得与正常模式一致、仅展示阶段 / 耗时 / 工具名与状态的
-   原生折叠过程卡和独立最终回答；turn 正常结束但存在失败工具时只把用户可见汇总标为
-   “已完成（含警告）”，不改变 completed job terminal，真正的 run failure 仍独立显示。SDK runtime 不可用时回退 `~/.dsh/profiles/<profile>-safe`
-   （`dsh-base` + `dsh-headless`）并以活动状态卡兜底；单任务空闲超时（默认 10 分钟，
-   持续无活动事件才终止，活跃的流式任务不会被误杀）、
-   `/safemode stop` 与卡片 ⏹ 按钮可随时终止；`/safemode exit` 重启完整 profile 并交还通道。
-   守护检测到 dsh 下线时会先自动重启完整 profile：spawn 前二次进程探测防双实例，就绪窗口
-   （默认 15s）内等待桥接恢复（心跳新鲜或进程存活），失败才转交接管；重启冷却默认 60s。
-   守护以 systemd user unit / LaunchAgent / Windows 启动项注册，进程本身不依赖任何 dsh /
-   Cordis 代码。状态查询采用 fail-closed 身份证明：只接受本包精确 `guardian run` 命令形状的唯一
-   存活进程，排除查询进程自身；systemd / launchd 的服务 PID 可用时必须与进程快照一致，任何歧义或
-   查询期间退出都报告“未发现”。
+`src/session/projection-store.ts` 持久化连接，而不是复制 DSH transcript。每条连接包含：
 
-12. **会话内诊断导出（issue #29）**：`src/diagnostics/bundle.ts` 接收 bridge 已有的只读运行快照，
-   输出内存 Markdown `Buffer`；`CommandChannel.sendFile` 通过 `@larksuite/channel` 的 Buffer 上传能力
-   发回原 chat/thread，不授予任意本地文件读取目录，也不产生临时文件。命令仅管理员可用，内容排除
-   消息正文/transcript/凭据标识和值；日志只来自当前进程内 logger ring，不读取共享宿主 stdout，
-   按限额投影并在上传前再次做常见模式、已知环境敏感值和
-   home path 脱敏；终端 `doctor` 的真实 adapter 探测保持独立，聊天命令不会启动第二套 runtime。
-13. **dsh Web 可视化配置（issue #36）**：浏览器卡片集中呈现应用、workspace、模型、并行数、
-    adapter 与提醒默认值，并逐项标注重连/下一任务生效；诊断区直接检查脱敏 settings snapshot，
-    `/status` / `/doctor` 保留为运行态降级路径，不建立新的高权限 RPC。远程 settings scope 为只读时禁用保存。secret 永不进入 Host→Web 响应，配置
-    提交由官方 revision fence/持久 provider 负责，bridge lifecycle reload 失败只记结构化告警且不并发
-    启动第二 generation。
+- 飞书 scope、chatId、可选 threadId；
+- workspace 路径与 DSH sessionId；
+- `half` 或 `full` 连接模式；
+- DSH 事件游标、当前回合来源和远端消息关联信息。
 
-14. **模型目录能力保真与卡片自洽（issue #80）**：bridge 仍以 provider/settings 的目录为权威，
-    models.dev 运行时目录只负责发现 provider 展示名、模型能力与供应商声明的推理档位；短 TTL
-    缓存与 stale-on-error 避免目录抖动阻断聊天；首次离线时只投影 settings，并将对象形式
-    `agent-default-model` 作为其已配置 provider 的最小可解析条目，不存在代码内置模型或展示名兜底，
-    其他未知模型仍拒绝。bot 写回模型时只保存用户显式增量并保留 `inputModalities` 与图像预算字段；
-    选中的 DeepSeek 视觉模型会在运行准入时把该能力最小持久化到官方 runtime 目录；持久化在 YAML AST
-    上定点更新目标模型，不替换 `models` 序列，以保留部署者写在模型条目和字段上的注释。
-    卡片把 `agent-default-model` 的缺席条目合并进本次投影与点击路由，不反向篡改 provider 配置；
-    按钮按 provider 去除公共前缀、每行最多两个，以保证移动端可辨认。
+同一个 DSH session 同一时间只允许归属一个飞书 scope。管理员可通过 `/use` 迁移；普通用户必须先在
+原聊天 `/detach`。
 
-15. **显式 DSH session 消息投影（issue #53）**：`SessionProjectionStore` 以原子 0600 文件保存
-    独占 binding、历史待确认水位/已确认交付 cursor、当前 turn 来源、近期消息映射和飞书 prompt
-    `rpcId`；仅为崩溃后续写同一流式卡保存该卡未终态正文，不复制完整 transcript。
-    `/session` 只列当前 canonical workspace 的非 subagent 元数据；确认 nonce 固化 operator、scope、
-    workspace，并在披露标题/ID/更新时间/回填量/替换或迁移后才发送历史。私聊授权用户可绑定，
-    member 仅 owner，共享 group/topic 与跨 scope 迁移仅管理员。history/live/reconnect 共用按 seq
-    串行投影管线；独占 claim 后先以 pending history 阻塞 live，历史交付成功才提交 cursor，失败在
-    启动/重连按原持久水位重试，水位后的事件再 catch-up；新卡用包含 binding generation/目标的稳定
-    Feishu `uuid` 幂等创建，业务错误或缺 message ID 不提交 cursor。
-    assistant chunk 节流更新同一 bot-owned 卡，
-    重启复用持久卡 ID/正文，失败追加。
-    WebUI/TUI open/resume/activity 不自动修改 binding，也不广播。TUI 兼容保持单仓库单包：唯一根
-    `dsh-plugin.json` 声明 v0.15 host facet 与 optional fallback；公开可选 seam 缺失即 no-op，资源
-    绑定插件 lifecycle。facet 为 `trusted-in-process`、不是沙箱；项目保持 AGPL-3.0，生态 listing
-    不等于认证、安全审查、背书或许可证豁免。
+### 半衔接
 
-16. **双上游发布雷达（issue #54）**：`scripts/upstream-release-config.mjs` 显式声明 dsh 与
-    dsh-TUI 的 GitHub 仓库、npm 包集合及人工确认的首次基线。每日 workflow 通过结构化 API 获取
-    全部非 draft Releases 与 npm 全版本/time/dist-tags，以“upstream id + 规范化 SemVer”归并；
-    基线及历史版本不补发。`upstream-update` Issue 的 v1 隐藏标记同时覆盖 open/closed 去重，自动区块
-    与人工 checklist 分离，因此 npm-only 事件在 Release 后补时只替换自动区块，不抹掉人工勾选。
-    上游 notes 是不受信任数据：控制字符与 mention 被中和，Markdown 有长度上限，只经 JSON API
-    写入，永不拼接或执行 shell。单源故障可显式降级，所有来源均失败或 Issue API 失败才令任务失败；
-    workflow 仅授予 `contents: read` / `issues: write` 并用 concurrency group 串行化。
+- 飞书发起的 user/assistant 回合返回飞书；
+- Web/TUI 单独发起的后续回合不投影；
+- 电脑端仍能看到飞书回合，因为真实执行始终发生在同一个 DSH session。
 
-17. **频道自描述、runtime Skill 与密钥数据平面（issue #85）**：SDK / ACP / Web 共用的
-    `run-flow` 在每次 fresh/resume prompt 前注入有界 `ChannelContext`，仅含 tenant、chat type、scope、
-    bridge profile、adapter、可用 channel tools 与三层语言策略，不含 credential。上下文明确说明
-    bridge 预处理的斜杠命令不属于 Agent tool list；Skill 失败时 `/help` 仍是权威清单。Cordis `ctx.skills`
-    注册 lifecycle-bound `dsh-lark-bot` runtime Skill，命令索引与 `/help` 共享单一目录。
-    `lark_request_secret` 只传 target/reference/purpose/sessionId；localhost callback 把 session 映射为
-    scope、校验当前 actor 为管理员并发送 owner-only password form。回调在异步写前 claim 一次性请求，
-    仅 allowlist `dsh-credential` 与当前 profile `app-secret`，结果只返回 configured 状态。原始值不经过
-    adapter/prompt/session/jobs/archive/logger/diagnostics/response。Guardian 明确为降级面。profile 语言策略
-    以 0600 原子文件保存：UI 固定 per-viewer，plain 可 bilingual/zh/en，agent 可 auto/zh/en。
+### 完整衔接
 
-18. **出站通知渠道（issue #113）**：在飞书一等通知路径之外，提供**可选的、只出站的单向通知渠道**（`OutboundSink`，镜像 `AgentAdapter` 的可插拔 seam）。`NotificationChannelStore`（`<profile>/notification-channels.json`，0600）持久化渠道 `{ id, type, label, destination, secret, enabled, mentionMap? }`，凭据（telegram bot token / wecom webhook key）只存于此文件、绝不经日志 / 卡片 / 诊断 / 命令回显（`maskSecret` / `maskChannel` 是唯一渲染入口）。`OutboundSinkRegistry` 按类型构建缓存 sink 实例（首期 `TelegramSink` 走官方 Bot API `sendMessage`、`WeComSink` 走企业微信群机器人 webhook，均为无状态 HTTPS POST），`broadcast()` 对每个启用且已配置渠道 best-effort 投递，单渠道失败不阻塞其他渠道、更不污染飞书终态。`NotificationDispatcher` 保持飞书为默认一等路径：在持久 job 终态后发送完成 / 失败提醒，并按 scope 偏好 `sinks` 追加广播；`notifyUrgent()` 面向「突发 / 故障」类事件，不管 scope 是否 opt-in 都广播到全部启用渠道（安全网守护 / 重连 / 心跳异常的天然来源），scope 显式开启 `urgent` 事件时也发送飞书。`/channels`（管理员）管理渠道，`/notifications ... sinks=<id1,id2>` 为 scope 选渠道，`/status` 显示启用渠道 id（不显示密文）。未配置任何额外渠道时行为与现状完全一致：偏好默认 `sinks: []`，飞书仍为唯一完整交互平台，这些渠道**不做任何入站**（命令 / 卡片 / 问答 / 审批 / 文件）。
+- 半衔接的行为全部保留；
+- Web/TUI 发起的新消息及回复也投影到绑定的飞书聊天。
 
-## 目录映射 · Directory Mapping
+`/use` 和首次自动连接都显式设置 `half`；`/switch` 才能改成 `full`。`/detach` 删除连接和本地 scope
+映射，但不删除 DSH session。
 
-| 目录 Dir | 职责 Responsibility |
-| :--- | :--- |
-| `src/bridge/` | 飞书通道接入（消息、卡片、媒体） |
-| `src/onboard/` | 首次扫码创建 / 绑定 PersonalAgent 应用 |
-| `src/session/` | 会话路由、上下文记忆、持久化 |
-| `src/tui/` | dsh-TUI Host Descriptor 五态 admission 与可选 lifecycle seam |
-| `src/workspace/` | 项目工作区管理 |
-| `src/adapters/` | agent 后端适配器（web 默认单写者 / sdk 独立 runtime / acp 审批 / headless legacy） |
-| `src/card/` | 流式过程卡（schema 2.0 原生折叠面板 + 顶层兼容快照 + legacy renderer）、审批 / 问答 / 计划决策卡状态与渲染；最终回答由正常 run-flow / guardian 分别单独发送 |
-| `src/bot/` | 持久任务账本、运行注册、消息排队、审批 / 问答 / 计划 registry、群聊隔离策略，以及多机器人 fleet / 跨进程交接计数 |
-| `src/commands/` | 斜杠命令（/cd /ws /new …） |
-| `src/cli/` | CLI 入口：`setup` / `bot add|list|status|remove` / `service` / `doctor` / `upgrade` / 隐藏 `run` |
-| `src/upgrade/` | CLI 与飞书内升级：版本/状态检测、owner-bound offer、guardian / profile 重启、runtime profile 链接及依赖迁移 |
-| `src/config/` | profile / 配置 / 访问白名单管理 |
-| `src/client/` | dsh Web 插件设置卡与诊断快捷入口（动态 `./client` browser half） |
-| `src/core/` | 结构化日志 |
-| `src/diagnostics/` | 管理员 `/doctor` 的有界、脱敏、内存诊断文件生成 |
-| `src/media/` | 附件下载、文本注入与出站文件边界校验 |
-| `src/notify/` | 主动通知调度、进程内 `/notify` `/file` `/ask` `/plan` `/approval` `/secret` 回调、raw-schema dsh 工具与 approval answerer；`sinks/` 为出站只通知渠道（`OutboundSink` / `TelegramSink` / `WeComSink` / `NotificationChannelStore` / `OutboundSinkRegistry`） |
-| `src/secret/`、`src/skill/` | 安全密钥请求/allowlist 写入边界与官方 runtime Skill 注册 |
-| `src/platform/` | 跨平台原子写入 |
-| `src/guardian/` | 安全网守护（默认随 setup 安装）：心跳、状态持久化、仅核心安全 profile、进程观察、控制信号、接管状态机、系统服务安装 |
-| `src/service/` | 正常 dsh profile 的 systemd / launchd / Windows / portable 生命周期、0600 环境快照、状态与日志 |
-| `test/setup.ts` | vitest 启动前隔离现场 `DSH_HOME`：profile 构建类测试必须落在各自临时 home，绝不解析到（或穿透写坏）现场 dsh profile 的 `node_modules/dsh-lark-bot`（该符号链接回到仓库，会把真实 `package.json` 覆盖成夹具内容）。见 `test/test-hermeticity.test.ts` |
-| `docs/conformance/` | TUI local/remote Host Descriptor 与发布 artifact conformance evidence |
+## 5. 不回填历史
+
+`/use` 先读取目标 session 的当前事件序号，再建立连接并把游标推进到该快照。这样切换立即生效，但不会
+把已有 transcript 发进飞书。启动恢复同样从持久游标继续，避免重复投影已确认消息。
+
+## 6. 别名与生命周期
+
+`src/session/alias-manager.ts` 在默认工作区的 `.session_aliases.json` 保存稳定的
+`MMDD-N -> sessionId` 映射。同步 session 列表时只为未知 session 分配新别名；删除条目不会让其他编号
+重排。
+
+- `/delete` 调用 DSH 回收站能力，保留别名；
+- `/purge` 永久删除后移除别名；
+- `/rename` 修改 DSH 原生标题，因此 Web UI 与飞书显示同一名称；
+- `/sessions` 从 DSH 宿主读取跨工作空间会话，并结合 run-flow 与连接存储识别“当前对话”。
+
+## 7. 审批
+
+`src/notify/approval-answerer.ts` 只监听 DSH 已经产生的 `approval/request`。收到请求后并行等待：
+
+- `next()`：DSH Web/宿主的原生审批；
+- 飞书审批卡：相同 session、tool、callId 的远端回答。
+
+任一端先返回 `allowed-once` 即通过。一个端拒绝时仍等待另一个端；只有两端均未批准时才返回拒绝、取消
+或不可用。插件已删除旧的逐工具 `pre-execute` 门、权限策略存储和 `/permission` 命令。
+
+## 8. 交互卡片
+
+`src/commands/session-projection.ts` 为 `/use`、`/delete`、`/purge`、`/rename` 和 `/switch` 保存带过期时间
+的 nonce。卡片回调必须匹配发起人、scope、chat、thread、workspace 和目标 session，防止旧卡或转发卡
+误操作。
+
+操作完成后走“发送终态回复并撤回原卡”的稳定路径，避免飞书 SDK 的卡片 patch 返回非零业务码却不抛
+异常，造成按钮看似仍可点击。
+
+## 9. 进程内升级
+
+`src/upgrade/channel-update.ts` 管理管理员专属的升级确认卡；
+`src/upgrade/channel-runner.ts` 在当前 DSH 进程中串行执行一个升级任务，拒绝并发升级。升级完成后发送终态
+结果。它不再把任务交给 Guardian 或独立接管进程。
+
+如果更新后的插件需要重新装载，由 DSH 热加载机制执行；热加载失败时，操作者可通过托盘显式重启 DSH。
+
+## 10. 本地状态
+
+默认桥接状态根目录是 `~/.dsh-lark`，可由 `DSH_LARK_HOME` 改写。关键文件：
+
+| 路径 | 内容 |
+| --- | --- |
+| `config.json` | profile、凭据引用、访问控制与偏好 |
+| `profiles/<profile>/sessions.json` | 飞书 scope 到 DSH session 的运行映射 |
+| `profiles/<profile>/session-projections.json` | 飞书连接模式和事件游标 |
+| `<workspace>/.session_aliases.json` | 稳定 session 别名 |
+| `profiles/<profile>/jobs.json` | 可恢复任务账本 |
+| `profiles/<profile>/archives/` | 飞书侧会话消息归档 |
+| `profiles/<profile>/workspaces.json` | 工作空间配置 |
+| `service/<profile>.*` | 可选后台服务配置；不是 Guardian |
+
+仓库和运行时均不再使用 `guardian.json`、`guardian/heartbeat.json` 或 `/safemode`。
+
+## 11. 主要模块
+
+| 目录 | 职责 |
+| --- | --- |
+| `src/bridge/` | 飞书事件、任务运行、结果发送和长连接健康监测 |
+| `src/session/` | session 映射、别名、投影游标、归档 |
+| `src/commands/` | 斜杠命令和交互卡片动作 |
+| `src/notify/` | DSH 原生审批/提问/计划/文件回调 |
+| `src/integrated/session-manager/` | 集成 Web 会话管理面板 |
+| `src/adapters/dsh/` | host/web/sdk/acp/headless 适配 |
+| `src/upgrade/` | CLI 与飞书内进程内升级 |
+| `src/service/` | 可选的用户后台服务生命周期 |

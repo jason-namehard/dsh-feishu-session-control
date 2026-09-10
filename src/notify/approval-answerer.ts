@@ -1,12 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis';
+import { log } from '../core/logger.js';
 import {
-  isHighRiskTool,
-  policyDenialText,
-  toolApprovalDenial,
-  type PlanPolicyExecution,
   type PolicyDenial,
 } from '../policy/tool-policy.js';
-import type { ToolPluginContext } from './raw-tool.js';
 
 export const name = 'lark-approval-answerer';
 export const inject = ['approval', 'tools'];
@@ -18,10 +14,16 @@ export interface Config {
 
 type Outcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 
-interface ApprovalDecision {
-  outcome: Outcome;
-  denial?: PolicyDenial;
-}
+/**
+ * What the engine decided about one request.
+ *
+ * `owned: true` means the engine accepted the request *and* delivered a Feishu
+ * card, so its `outcome` is the only answer that exists for it. `owned: false`
+ * means no card is out and the desktop answerer still owns the request.
+ */
+type OwnershipDecision =
+  | { owned: true; outcome: Outcome; denial?: PolicyDenial }
+  | { owned: false };
 
 interface RawApprovalRequest {
   agent?: { session?: { id?: unknown } };
@@ -38,77 +40,74 @@ type ApprovalContext = Context & {
     event: 'approval/request',
     listener: (request: RawApprovalRequest, next: () => Promise<Outcome>) => Promise<Outcome>,
   ): unknown;
-  on(
-    event: 'tools/pre-execute',
-    listener: (
-      execution: PlanPolicyExecution,
-      next: () => Promise<unknown>,
-    ) => Promise<unknown>,
-  ): unknown;
 };
 
-/** Terminal rc.8 approval answerer for the nested SDK and host runtimes. */
+/**
+ * Mirror only approvals that DSH itself decided to ask.
+ *
+ * Every request has exactly one owner, and this listener decides which one
+ * before anything is surfaced. It asks Feishu first and only falls back to
+ * `next()` — the DSH-native desktop/Web answerer — when the engine did not take
+ * the request at all.
+ *
+ * Asking both is not an option: once `next()` has put a prompt in the browser,
+ * DSH exposes no way to recall it, so a card answered first would leave a tool
+ * call that Feishu already settled still waiting on screen. That is the defect
+ * this rule removes (session `session-07e35a7b`, where the Feishu-approved
+ * `write` request kept its browser prompt forever). The mirror-image bug is
+ * gone with it: a Feishu `rejected` no longer re-asks the desktop.
+ */
 export function apply(ctx: Context, config: Config = {}): void {
-  const approvalCtx = ctx as ApprovalContext & ToolPluginContext;
-  const inFlightGrant = new WeakMap<object, string>();
+  const approvalCtx = ctx as ApprovalContext;
 
   approvalCtx.on('approval/request', async (request, next) => {
-    if (request.agent && inFlightGrant.get(request.agent) === request.toolName) {
-      inFlightGrant.delete(request.agent);
-      return 'allowed-once';
+    if (request.signal?.aborted) {
+      // DSH already withdrew this request, so there is nothing left to ask.
+      // Running the native answerer for a dead request can only produce a
+      // prompt no answer can close.
+      return 'cancelled';
     }
-    return (await requestBridgeApproval(config, request, next)).outcome;
-  });
-
-  approvalCtx.on('tools/pre-execute', async (execution, next) => {
-    const highRisk = isHighRiskTool(approvalCtx, execution);
-    if (!highRisk && !approvalEndpoint(config)) return next();
-    const request: RawApprovalRequest = {
-      ...(execution.agent === undefined
-        ? {}
-        : { agent: execution.agent as NonNullable<RawApprovalRequest['agent']> }),
-      toolName: execution.name,
-      reason: approvalReason(execution),
-      toolInput: execution.arguments,
-      lowRisk: !highRisk,
-    };
-    const decision = await requestBridgeApproval(config, request, async () => 'unavailable');
-    if (decision.outcome !== 'allowed-once') {
-      return {
-        kind: 'deny',
-        reason: policyDenialText(
-          decision.denial ?? (
-            decision.outcome === 'rejected'
-              ? toolApprovalDenial(execution.name)
-              : {
-                  layer: 'tool-approval',
-                  reason: `tool ${execution.name} did not receive approval (${decision.outcome})`,
-                  toChange: 'retry only after approval is available, or choose a safer alternative',
-                }
-          ),
-        ),
-      };
+    const decision = await requestBridgeApproval(config, request);
+    const sessionId = typeof request.agent?.session?.id === 'string'
+      ? request.agent.session.id
+      : undefined;
+    const toolName = typeof request.toolName === 'string' ? request.toolName : undefined;
+    if (!decision.owned) {
+      log.info('approval-answerer', 'desktop-owns-request', {
+        ...(sessionId === undefined ? {} : { sessionId }),
+        ...(toolName === undefined ? {} : { toolName }),
+      });
+      return next();
     }
-    if (execution.agent) inFlightGrant.set(execution.agent, execution.name);
-    try {
-      return await next();
-    } finally {
-      if (execution.agent) inFlightGrant.delete(execution.agent);
-    }
+    log.info('approval-answerer', 'feishu-owns-request', {
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(toolName === undefined ? {} : { toolName }),
+      outcome: decision.outcome,
+    });
+    return decision.outcome;
   });
 }
 
+/**
+ * Ask the bridge whether it owns this request.
+ *
+ * `owned` is read from the response body regardless of the HTTP status: it is
+ * the engine's own statement that it holds the request, and it outranks the
+ * transport's verdict. Anything without it — a missing endpoint or token, a
+ * session the engine cannot route to Feishu, an unreachable engine — leaves the
+ * request to the desktop, which is where it would have gone had this plugin
+ * never been installed.
+ */
 async function requestBridgeApproval(
   config: Config,
   request: RawApprovalRequest,
-  next: () => Promise<Outcome>,
-): Promise<ApprovalDecision> {
+): Promise<OwnershipDecision> {
     const endpoint = approvalEndpoint(config);
     const token = config.token ?? process.env.DSH_LARK_NOTIFY_TOKEN;
-    if (!endpoint || !token) return { outcome: await next() };
+    if (!endpoint || !token) return { owned: false };
     const sessionId = request.agent?.session?.id;
     if (sessionId === undefined || typeof request.toolName !== 'string') {
-      return { outcome: 'unavailable' };
+      return { owned: false };
     }
     try {
       const response = await fetch(endpoint, {
@@ -126,34 +125,35 @@ async function requestBridgeApproval(
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       });
       const body = await response.json() as {
-        ok?: boolean;
+        ok?: unknown;
+        owned?: unknown;
         outcome?: unknown;
         denial?: unknown;
       };
+      if (body.owned !== true) return { owned: false };
       return response.ok && body.ok === true && isOutcome(body.outcome)
         ? {
+            owned: true,
             outcome: body.outcome,
             ...(isPolicyDenial(body.denial) ? { denial: body.denial } : {}),
           }
-        : { outcome: 'unavailable' };
+        // A card was delivered and the engine closed the request without a
+        // decision it could state. Reporting it as cancelled keeps the request
+        // with Feishu; handing it to the desktop here would surface a prompt
+        // for a request whose card is already gone.
+        : { owned: true, outcome: 'cancelled' };
     } catch {
-      return { outcome: request.signal?.aborted ? 'cancelled' : 'unavailable' };
+      // An abort is attributable to the request itself: DSH withdrew it, so no
+      // answerer has anything left to answer. Every other failure is the engine
+      // being unreachable, which leaves the desktop as the only owner.
+      return request.signal?.aborted === true
+        ? { owned: true, outcome: 'cancelled' }
+        : { owned: false };
     }
 }
 
 function approvalEndpoint(config: Config): string | undefined {
   return config.endpoint ?? process.env.DSH_LARK_APPROVAL_URL;
-}
-
-function approvalReason(execution: PlanPolicyExecution): string {
-  if (
-    typeof execution.arguments === 'object' && execution.arguments !== null &&
-    'description' in execution.arguments &&
-    typeof (execution.arguments as { description?: unknown }).description === 'string'
-  ) {
-    return (execution.arguments as { description: string }).description;
-  }
-  return `Execute high-risk tool ${execution.name}`;
 }
 
 function isOutcome(value: unknown): value is Outcome {
@@ -165,7 +165,7 @@ function isPolicyDenial(value: unknown): value is PolicyDenial {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const denial = value as Partial<PolicyDenial>;
   return (
-    denial.layer === 'plan-gate' || denial.layer === 'permission-policy' ||
-    denial.layer === 'tool-approval' || denial.layer === 'file-sandbox'
+    denial.layer === 'dsh-native-approval' || denial.layer === 'plan-gate' ||
+    denial.layer === 'file-sandbox'
   ) && typeof denial.reason === 'string' && typeof denial.toChange === 'string';
 }

@@ -5,6 +5,11 @@ import { describe, expect, it } from 'vitest';
 import { writeFileAtomic } from '../../src/platform/atomic-write.js';
 
 describe('writeFileAtomic', () => {
+  it('treats the shared :memory: test sentinel as a no-op', async () => {
+    await expect(writeFileAtomic(':memory:', '{"ignored":true}')).resolves.toBeUndefined();
+    await expect(readFile(':memory:', 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('creates parent directories and writes the file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-lark-atomic-'));
     const target = join(root, 'nested', 'state.json');

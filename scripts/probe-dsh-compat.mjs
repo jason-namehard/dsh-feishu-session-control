@@ -8,23 +8,20 @@
 // `@deepseek-ai/dsh-sdk-jsonrpc-server` at the pinned version, discovers the
 // harness binary and performs a real SDK initialize round-trip.
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable as NodeReadable, Writable as NodeWritable } from 'node:stream';
-import { DatabaseSync } from 'node:sqlite';
-import { pathToFileURL } from 'node:url';
 import {
   ClientSideConnection,
   ndJsonStream,
   PROTOCOL_VERSION,
 } from '@agentclientprotocol/sdk';
-import { Context } from '@deepseek-ai/cordis';
-import { resolveCompatApprovalRequest } from './compat-approval-fixture.mjs';
 import { readDshCompatibility, rootDir } from './dsh-compat.mjs';
+
+const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 
 const textResponse = (text) => [
   JSON.stringify({ choices: [{ delta: { role: 'assistant', content: '' }, index: 0, finish_reason: null }] }),
@@ -34,14 +31,35 @@ const textResponse = (text) => [
 ];
 
 const MAX_FIXTURE_MODEL_REQUESTS = 32;
+const shellToolName = process.platform === 'win32' ? 'pwsh' : 'bash';
+const acpDeniedCommand = process.platform === 'win32'
+  ? "Write-Output 'acp-must-not-run'"
+  : 'printf acp-must-not-run';
+const approvalRejectedCommand = process.platform === 'win32'
+  ? "Write-Output 'must-not-run-approval'"
+  : 'printf must-not-run-approval';
+
+function toolInputCommand(toolInput) {
+  if (typeof toolInput === 'string') {
+    try {
+      return JSON.parse(toolInput)?.command;
+    } catch {
+      return undefined;
+    }
+  }
+  return toolInput?.command;
+}
+
+function isRejectedApproval(approval) {
+  return approval.callId === 'compat-reject-bash' ||
+    toolInputCommand(approval.toolInput) === approvalRejectedCommand;
+}
 
 async function startCompatServer() {
   const notifications = [];
   const questions = [];
   const plans = [];
   const approvals = [];
-  const policyChecks = [];
-  const lowRiskApprovals = [];
   const modelRequests = [];
   const server = createServer((request, response) => {
     let raw = '';
@@ -67,12 +85,14 @@ async function startCompatServer() {
       }
       if (request.url === '/approval') {
         const approval = JSON.parse(raw);
-        const route = resolveCompatApprovalRequest(approval);
-        if (route.kind === 'policy-check') policyChecks.push(approval);
-        else if (route.kind === 'low-risk') lowRiskApprovals.push(approval);
-        else approvals.push(approval);
+        approvals.push(approval);
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify(route.response));
+        response.end(JSON.stringify({
+          ok: true,
+          outcome: isRejectedApproval(approval)
+            ? 'rejected'
+            : 'allowed-once',
+        }));
         return;
       }
       if (request.url !== '/v1/chat/completions') {
@@ -108,20 +128,11 @@ async function startCompatServer() {
       const isPlan = serializedInput.includes('Call lark_request_plan_approval once.');
       const hasPlanResult = serializedInput.includes('compat-plan-call') &&
         serializedInput.includes('compat-approved');
-      const isPlanGate = serializedInput.includes('Verify the enforced plan gate.');
       const isApprovalReject = serializedInput.includes('Verify rejected approval recovery.');
       const hasRejectPlan = serializedInput.includes('compat-reject-plan') &&
         serializedInput.includes('compat-approved');
       const hasApprovalReject = serializedInput.includes('compat-reject-bash') &&
-        serializedInput.includes('[policy-denial layer=tool-approval]');
-      const hasRecoveryNotify = serializedInput.includes('compat-recovery-notify') &&
-        serializedInput.includes('Message sent to compat-chat');
-      const hasGateDenial = serializedInput.includes('compat-gate-denied') &&
-        serializedInput.includes('[policy-denial layer=plan-gate]');
-      const hasGateApproval = serializedInput.includes('compat-gate-plan') &&
-        serializedInput.includes('compat-approved');
-      const hasGateExecution = serializedInput.includes('compat-gate-bash') &&
-        serializedInput.includes('compat-gate-ok');
+        approvals.some(isRejectedApproval);
       const hasNotifyResult = serializedInput.includes('Message sent to compat-chat');
       const events = hasNativeImage
         ? textResponse('acp-image-ok')
@@ -129,55 +140,29 @@ async function startCompatServer() {
           ? textResponse('acp-task-approval-ok')
           : isAcpTask && hasAcpPlanApproval
             ? [
-              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-acp-bash', type: 'function', function: { name: 'bash', arguments: '{"command":"printf acp-must-not-run","description":"Verify ACP permission rejection","sandbox_permissions":"danger-full-access","justification":"Verify that the ACP client receives and rejects this one-shot escalation."}' } }] }, index: 0, finish_reason: null }] }),
+              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-acp-bash', type: 'function', function: { name: shellToolName, arguments: JSON.stringify({ command: acpDeniedCommand, description: 'Verify ACP permission rejection', sandbox_permissions: 'danger-full-access', justification: 'Verify that the ACP client receives and rejects this one-shot escalation.' }) } }] }, index: 0, finish_reason: null }] }),
               JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }),
               '[DONE]',
             ]
             : isAcpTask
               ? [
-                JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-acp-plan', type: 'function', function: { name: 'lark_request_plan_approval', arguments: '{"plan":"1. verify ACP plan callback\n2. request and reject a one-shot escalation"}' } }] }, index: 0, finish_reason: null }] }),
+                JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-acp-plan', type: 'function', function: { name: 'lark_request_plan_approval', arguments: '{"plan":"1. verify ACP plan callback\\n2. request and reject a one-shot escalation"}' } }] }, index: 0, finish_reason: null }] }),
                 JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }),
                 '[DONE]',
               ]
         : isResume
         ? textResponse(hasPersistedFirstTurn ? 'resume-ok' : 'resume-history-missing')
-        : isApprovalReject && hasRecoveryNotify
-          ? textResponse('approval-reject-recovered')
-          : isApprovalReject && hasApprovalReject
-            ? [
-              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-recovery-notify', type: 'function', function: { name: 'lark_notify', arguments: '{"text":"approval rejected; continuing safely"}' } }] }, index: 0, finish_reason: null }] }),
-              JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }),
-              '[DONE]',
-            ]
+        : isApprovalReject && hasApprovalReject
+          ? textResponse('')
           : isApprovalReject && hasRejectPlan
             ? [
-              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-reject-bash', type: 'function', function: { name: 'bash', arguments: '{"command":"printf must-not-run-approval","description":"Verify rejection recovery"}' } }] }, index: 0, finish_reason: null }] }),
+              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-reject-bash', type: 'function', function: { name: shellToolName, arguments: JSON.stringify({ command: approvalRejectedCommand, description: 'Verify rejection recovery', sandbox_permissions: 'danger-full-access', justification: 'Verify that DSH native approval rejection stops this command.' }) } }] }, index: 0, finish_reason: null }] }),
               JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }),
               '[DONE]',
             ]
           : isApprovalReject
             ? [
-              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-reject-plan', type: 'function', function: { name: 'lark_request_plan_approval', arguments: '{"plan":"1. request permission\n2. attempt the high-risk command\n3. continue safely if rejected"}' } }] }, index: 0, finish_reason: null }] }),
-              JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }),
-              '[DONE]',
-            ]
-        : isPlanGate && hasGateExecution
-          ? textResponse('plan-gate-ok')
-          : isPlanGate && hasGateApproval
-            ? [
-              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-gate-bash', type: 'function', function: { name: 'bash', arguments: '{"command":"printf compat-gate-ok","description":"Print plan gate success marker"}' } }] }, index: 0, finish_reason: null }] }),
-              JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }),
-              '[DONE]',
-            ]
-          : isPlanGate && hasGateDenial
-            ? [
-              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-gate-plan', type: 'function', function: { name: 'lark_request_plan_approval', arguments: '{"plan":"1. verify denial\\n2. run approved command"}' } }] }, index: 0, finish_reason: null }] }),
-              JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }),
-              '[DONE]',
-            ]
-          : isPlanGate
-            ? [
-              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-gate-denied', type: 'function', function: { name: 'bash', arguments: '{"command":"printf must-not-run","description":"Attempt command before plan approval"}' } }] }, index: 0, finish_reason: null }] }),
+              JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-reject-plan', type: 'function', function: { name: 'lark_request_plan_approval', arguments: '{"plan":"1. request permission\\n2. attempt the high-risk command\\n3. continue safely if rejected"}' } }] }, index: 0, finish_reason: null }] }),
               JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }),
               '[DONE]',
             ]
@@ -218,8 +203,6 @@ async function startCompatServer() {
     questions,
     plans,
     approvals,
-    policyChecks,
-    lowRiskApprovals,
     modelRequests,
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
@@ -246,6 +229,9 @@ async function probeAcpRuntime({ harnessBin, workspace, env, modelRequests }) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   if (!child.stdin || !child.stdout) throw new Error('ACP image probe has no protocol streams');
+  child.stderr?.on('data', (chunk) => {
+    process.stderr.write(`[probe:acp] ${String(chunk)}`);
+  });
   const text = [];
   const permissions = [];
   const conn = new ClientSideConnection(
@@ -273,7 +259,19 @@ async function probeAcpRuntime({ harnessBin, workspace, env, modelRequests }) {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {},
     });
-    const session = await conn.newSession({ cwd: workspace, mcpServers: [] });
+    let session;
+    let sessionError;
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      try {
+        session = await conn.newSession({ cwd: workspace, mcpServers: [] });
+        break;
+      } catch (error) {
+        sessionError = error;
+        if (!String(error).match(/internal error/i)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      }
+    }
+    if (!session) throw sessionError;
     await conn.prompt({
       sessionId: session.sessionId,
       prompt: [{ type: 'text', text: 'Verify ACP text task and approval.' }],
@@ -327,83 +325,6 @@ async function probeAcpRuntime({ harnessBin, workspace, env, modelRequests }) {
   }
 }
 
-async function probeSqliteMigrationBoundary({ profilesRoot, root }) {
-  const sqliteDir = join(root, 'sqlite-rc7');
-  const databasePath = join(sqliteDir, 'sessions.db');
-  await mkdir(sqliteDir, { recursive: true, mode: 0o700 });
-  const database = new DatabaseSync(databasePath);
-  database.exec(`
-    PRAGMA application_id = 1146308688;
-    PRAGMA user_version = 15;
-    CREATE TABLE persistence_state (
-      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      store_id TEXT NOT NULL
-    ) STRICT;
-    CREATE TABLE sessions (
-      id TEXT PRIMARY KEY, version INTEGER NOT NULL, created_at INTEGER NOT NULL,
-      cwd TEXT, parent_session TEXT, seed_length INTEGER, origin TEXT,
-      delegation_depth INTEGER, agent_preset TEXT, incarnation TEXT NOT NULL,
-      revision INTEGER NOT NULL
-    ) STRICT;
-    CREATE TABLE events (
-      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-      seq INTEGER NOT NULL, type TEXT NOT NULL, time INTEGER NOT NULL,
-      data TEXT NOT NULL, source_event_seqs TEXT, surface_op TEXT, ignorable INTEGER,
-      PRIMARY KEY (session_id, seq)
-    ) STRICT;
-  `);
-  database.prepare('INSERT INTO persistence_state (singleton, store_id) VALUES (1, ?)')
-    .run(randomUUID());
-  database.prepare(`
-    INSERT INTO sessions
-      (id, version, created_at, cwd, incarnation, revision)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run('rc7-session', 1, 1, '/compat/rc7', randomUUID(), 1);
-  database.prepare(`
-    INSERT INTO events
-      (session_id, seq, type, time, data)
-    VALUES (?, ?, ?, ?, ?)
-  `).run('rc7-session', 1, 'assistant/message', 1, '{"message":{"content":[{"type":"text","text":"rc7-marker"}]}}');
-  database.close();
-  await chmod(databasePath, 0o600);
-  const before = await readFile(databasePath);
-
-  const sqliteModule = await import(pathToFileURL(join(
-    profilesRoot,
-    'node_modules',
-    '@deepseek-ai',
-    'dsh-session-persistence-sqlite',
-    'lib',
-    'index.js',
-  )).href);
-  const sqliteContext = new Context();
-  await sqliteContext.provide('sessions', {
-    list: () => [],
-    get: () => undefined,
-    prepare: () => {
-      throw new Error('unexpected rc.7 session preparation after schema rejection');
-    },
-  });
-  const provider = new sqliteModule.SqliteSessionPersistence(sqliteContext, {
-    path: databasePath,
-    journalMode: 'delete',
-  });
-  let rejection;
-  try {
-    await provider.load('rc7-session');
-  } catch (error) {
-    rejection = error;
-  }
-  if (!String(rejection).match(/schema version 15.*incompatible.*17/i)) {
-    throw new Error(`rc.8 SQLite did not reject rc.7 schema 15: ${String(rejection)}`);
-  }
-  const after = await readFile(databasePath);
-  if (!before.equals(after)) {
-    throw new Error('rc.8 SQLite modified the rejected rc.7 database');
-  }
-  console.log('[probe] sqlite rc.7 schema 15 rejected by rc.8 schema 17 without modifying the database');
-}
-
 async function main() {
   const compat = readDshCompatibility();
   const rootPackage = JSON.parse(
@@ -452,7 +373,6 @@ async function main() {
           dependencies: {
             '@deepseek-ai/dsh': compat.harness,
             '@deepseek-ai/dsh-base': compat.harness,
-            '@deepseek-ai/dsh-session-persistence-sqlite': compat.harness,
           },
         },
         null,
@@ -474,7 +394,11 @@ async function main() {
       'utf8',
     );
     console.log(`[probe] installing dsh ${compat.harness} into ${dshHome}`);
-    await run('pnpm', ['install'], { cwd: profilesRoot, env });
+    await run(pnpmCommand, ['install'], {
+      cwd: profilesRoot,
+      env,
+      shell: process.platform === 'win32',
+    });
 
     // 2. Assert the installed harness version matches the matrix.
     const harnessBin = join(
@@ -509,10 +433,8 @@ async function main() {
       throw new Error(`dsh version mismatch: got "${version}", expected ${compat.harness}`);
     }
     console.log(`[probe] harness version ok: ${version}`);
-    await probeSqliteMigrationBoundary({ profilesRoot, root });
-
     // Configure a local OpenAI-compatible route. This makes the probe keyless
-    // while still exercising a real rc.8 model loop, tool call and resume.
+    // while still exercising a real pinned DSH model loop, tool call and resume.
     await writeFile(
       join(dshHome, 'settings.yaml'),
       [
@@ -584,16 +506,9 @@ async function main() {
       modelRequests: compatServer.modelRequests,
     });
     console.log(`[probe] acp text task + permission callback ok (${acpResult.permissionCount} request)`);
-    if (!compatServer.policyChecks.some((request) =>
-      request.policyCheckOnly === true &&
-      request.toolName === 'lark_request_plan_approval' &&
-      typeof request.sessionId === 'string'
-    )) {
-      throw new Error('ACP plan tool did not complete the scope-policy preflight contract');
-    }
     console.log(acpResult.nativeImage
       ? '[probe] acp native PNG capability + content block ok'
-      : '[probe] acp rc.8 advertises no image capability; bridge fail-closed attachment rejection remains required');
+      : '[probe] pinned ACP runtime advertises no image capability; bridge fail-closed attachment rejection remains required');
     if (compatServer.plans.length !== 1) {
       throw new Error(`ACP plan callback count mismatch: ${compatServer.plans.length}`);
     }
@@ -601,12 +516,10 @@ async function main() {
     // 5. Run a complete SDK tool turn, then resume the same durable session.
     const { DeepSeekHarness } = await import('@deepseek-ai/dsh-sdk-client');
     const createHarness = () => new DeepSeekHarness({
-      launch: {
-        command: 'node',
-        args: [harnessBin, '--profile', 'dsh-lark-sdk'],
-        cwd: workspace,
-        env,
-      },
+      dshBin: harnessBin,
+      profile: 'dsh-lark-sdk',
+      processCwd: workspace,
+      env,
       cwd: workspace,
       provider: 'compat-local',
       model: 'compat-model',
@@ -657,7 +570,7 @@ async function main() {
       await firstHarness.close();
     }
 
-    // The rc.8 SDK server does not expose an API for rehydrating an existing
+    // The pinned SDK server does not expose an API for rehydrating an existing
     // named JSONL session in a new process. It must fail explicitly with the
     // persisted-log collision that run-flow recognizes and self-heals from;
     // silently starting an empty session would lose context.
@@ -681,53 +594,34 @@ async function main() {
       if (compatServer.questions.length !== 1) {
         throw new Error(`lark_ask_user execution count mismatch: ${compatServer.questions.length}`);
       }
-      const planned = await harness.run(
-        'Verify the enforced plan gate.',
-        { sessionId: 'compat-plan-session' },
-      );
-      if (planned.finalResponse !== 'plan-gate-ok') {
-        throw new Error(`unexpected plan-gate response: ${JSON.stringify(planned.finalResponse)}`);
-      }
-      if (compatServer.plans.length !== sdkPlanBaseline + 1) {
-        throw new Error(`plan tool execution count mismatch: ${compatServer.plans.length}`);
-      }
-      if (compatServer.approvals.length !== 1) {
-        throw new Error(`one-shot approval execution count mismatch: ${compatServer.approvals.length}`);
-      }
-      const approval = compatServer.approvals[0];
-      if (
-        approval.toolName !== 'bash' || !approval.reason ||
-        approval.toolInput?.command !== 'printf compat-gate-ok'
-      ) {
-        throw new Error(`incomplete one-shot approval payload: ${JSON.stringify(approval)}`);
-      }
       const rejected = await harness.run(
         'Verify rejected approval recovery.',
         { sessionId: 'compat-approval-reject-session' },
       );
-      if (rejected.finalResponse !== 'approval-reject-recovered') {
-        throw new Error(`approval rejection did not continue the turn: ${JSON.stringify(rejected.finalResponse)}`);
+      if (
+        rejected.finalResponse !== '' ||
+        !rejected.events.some((event) => (
+          event.type === 'approval/decided' && event.data?.outcome === 'rejected'
+        ))
+      ) {
+        throw new Error(`native approval rejection did not terminate cleanly: ${JSON.stringify(rejected)}`);
       }
       if (
-        compatServer.plans.length !== sdkPlanBaseline + 2 || compatServer.approvals.length !== 2 ||
-        compatServer.notifications.length !== 2
+        compatServer.plans.length !== sdkPlanBaseline + 1 || compatServer.approvals.length !== 1 ||
+        compatServer.notifications.length !== 1
       ) {
         throw new Error(
           `approval rejection recovery counts mismatch: plans=${compatServer.plans.length}, approvals=${compatServer.approvals.length}, notifications=${compatServer.notifications.length}`,
         );
       }
-      if (!compatServer.policyChecks.some((request) =>
-        request.policyCheckOnly === true && request.toolName === 'bash' &&
-        typeof request.sessionId === 'string'
-      )) {
-        throw new Error('SDK bash tool did not complete the scope-policy preflight contract');
+      const approval = compatServer.approvals[0];
+      if (
+        approval.toolName !== shellToolName || approval.callId !== 'compat-reject-bash' ||
+        !approval.reason
+      ) {
+        throw new Error(`incomplete native approval payload: ${JSON.stringify(approval)}`);
       }
-      if (!compatServer.lowRiskApprovals.some((request) =>
-        request.lowRisk === true && request.toolName === 'lark_request_plan_approval'
-      )) {
-        throw new Error('SDK plan tool did not complete the low-risk approval contract');
-      }
-      console.log('[probe] sdk task/notify/ask/enforced-plan-gate/one-shot-approval/resume ok against local OpenAI-compatible fixture');
+      console.log('[probe] sdk task/notify/ask/explicit-plan/native-approval-stop/resume ok against local OpenAI-compatible fixture');
     } finally {
       await harness.close();
     }
@@ -741,6 +635,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
   process.exitCode = 1;
 });

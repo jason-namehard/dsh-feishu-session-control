@@ -16,6 +16,7 @@ import {
 import { ownPackageInfo } from '../../../src/adapters/dsh/own-package.js';
 
 const tempDirs: string[] = [];
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -32,15 +33,15 @@ describe('resolveSdkLaunch', () => {
     expect(patch).toContain("id: lark-ask");
     expect(patch).toContain("name: 'dsh-lark-bot/ask'");
     expect(patch).toContain("id: lark-plan-approval");
-    expect(patch).toContain('policyEndpoint: !!js process.env.DSH_LARK_APPROVAL_URL');
+    expect(patch).not.toContain('policyEndpoint:');
     expect(patch).toContain("name: 'dsh-lark-bot/plan'");
     expect(patch).toContain("id: lark-approval-answerer");
     expect(patch).toContain("name: 'dsh-lark-bot/approval'");
-    expect(patch).toContain('use lark_request_plan_approval');
-    expect(patch).toContain('The bridge policy treats one uncomposed shell call as read-only');
-    expect(patch).toContain('do not try an equivalent command, tool, or path');
+    expect(patch).toContain('Use lark_request_plan_approval');
+    expect(patch).toContain('The Feishu bridge does not add a tool gate');
+    expect(patch).toContain('only DSH native approval and sandbox policy may block execution');
     expect(patch).toContain('use lark_ask_user and wait for the answer');
-    expect(patch).toContain('[policy-denial layer=...]');
+    expect(patch).not.toContain('[policy-denial layer=...]');
     expect(patch).toContain('uses lark_ask_user for interactive answers');
     // Regression guard (channel-skill bug): the model-invocable channel skill
     // must be mounted on the agent runtime context, not only the bridge engine.
@@ -68,7 +69,7 @@ describe('resolveSdkLaunch', () => {
     expect(patch).not.toContain('id: lark-approval-answerer');
     expect(patch).not.toContain('use lark_request_plan_approval');
     // The channel skill is not a bridge callback tool, so it stays mounted in
-    // the core-only safe overlay too (guardian recovery guidance).
+    // the core-only diagnostic overlay too.
     expect(patch).toContain('id: lark-skill');
     expect(patch).toContain("name: 'dsh-lark-bot/skill'");
   });
@@ -103,7 +104,7 @@ describe('ensureSdkProfile', () => {
           join(root, 'node_modules', SDK_SERVER_PACKAGE, 'package.json'),
           JSON.stringify({ name: SDK_SERVER_PACKAGE, version: SDK_SERVER_VERSION }),
         );
-        await symlink(own.root, join(root, 'node_modules', own.name), 'dir');
+        await symlink(own.root, join(root, 'node_modules', own.name), directoryLinkType);
       },
     });
 
@@ -147,7 +148,7 @@ describe('ensureSdkProfile', () => {
       home,
       install: async (root) => {
         await rm(join(root, 'node_modules', own.name), { recursive: true, force: true });
-        await symlink(own.root, join(root, 'node_modules', own.name), 'dir');
+        await symlink(own.root, join(root, 'node_modules', own.name), directoryLinkType);
       },
     });
     expect(result.ok).toBe(true);
@@ -170,7 +171,7 @@ describe('ensureSdkProfile', () => {
           join(root, 'node_modules', SDK_SERVER_PACKAGE, 'package.json'),
           JSON.stringify({ name: SDK_SERVER_PACKAGE, version: SDK_SERVER_VERSION }),
         );
-        await symlink(own.root, join(root, 'node_modules', own.name), 'dir');
+        await symlink(own.root, join(root, 'node_modules', own.name), directoryLinkType);
       },
     });
     expect(first.ok).toBe(true);
@@ -192,7 +193,7 @@ describe('ensureSdkProfile', () => {
       join(profileRoot, 'node_modules', SDK_SERVER_PACKAGE, 'package.json'),
       JSON.stringify({ name: SDK_SERVER_PACKAGE, version: '0.1.0-rc.6' }),
     );
-    await symlink(own.root, join(profileRoot, 'node_modules', own.name), 'dir');
+    await symlink(own.root, join(profileRoot, 'node_modules', own.name), directoryLinkType);
     await writeFile(join(profileRoot, 'package.json'), '{}');
     await writeFile(join(profileRoot, 'cordis.yml'), '[]\n');
     await writeFile(join(profileRoot, 'cordis.patch.yml'), '[]\n');
@@ -209,7 +210,7 @@ describe('ensureSdkProfile', () => {
       join(profileRoot, 'node_modules', SDK_SERVER_PACKAGE, 'package.json'),
       JSON.stringify({ name: SDK_SERVER_PACKAGE, version: '0.1.0-rc.6' }),
     );
-    await symlink(own.root, join(profileRoot, 'node_modules', own.name), 'dir');
+    await symlink(own.root, join(profileRoot, 'node_modules', own.name), directoryLinkType);
     await writeFile(join(profileRoot, 'package.json'), '{}');
     await writeFile(join(profileRoot, 'cordis.yml'), '[]\n');
     await writeFile(join(profileRoot, 'cordis.patch.yml'), '[]\n');
@@ -262,7 +263,7 @@ describe('ensureSdkProfile', () => {
           join(root, 'node_modules', SDK_SERVER_PACKAGE, 'package.json'),
           JSON.stringify({ name: SDK_SERVER_PACKAGE, version: SDK_SERVER_VERSION }),
         );
-        await symlink(ownRoot, join(root, 'node_modules', own.name), 'dir');
+        await symlink(ownRoot, join(root, 'node_modules', own.name), directoryLinkType);
       },
     });
 
@@ -293,7 +294,7 @@ describe('ensureSdkProfile', () => {
       join(profileRoot, 'node_modules', SDK_SERVER_PACKAGE, 'package.json'),
       JSON.stringify({ name: SDK_SERVER_PACKAGE, version: SDK_SERVER_VERSION }),
     );
-    await symlink(ownRoot, join(profileRoot, 'node_modules', own.name), 'dir');
+    await symlink(ownRoot, join(profileRoot, 'node_modules', own.name), directoryLinkType);
     await writeFile(join(profileRoot, 'package.json'), '{}');
     await writeFile(join(profileRoot, 'cordis.yml'), '[]\n');
     await writeFile(join(profileRoot, 'cordis.patch.yml'), patchYamlFor());
@@ -335,14 +336,14 @@ describe('ensureSdkProfile', () => {
       JSON.stringify({ name: SDK_SERVER_PACKAGE, version: SDK_SERVER_VERSION, main: 'index.js' }),
     );
     await writeFile(join(physicalNodeModules, SDK_SERVER_PACKAGE, 'index.js'), 'export {};\n');
-    await symlink(physicalOwnRoot, logicalOwnRoot, 'dir');
+    await symlink(physicalOwnRoot, logicalOwnRoot, directoryLinkType);
 
     await mkdir(join(profileRoot, 'node_modules', ...SDK_SERVER_PACKAGE.split('/')), { recursive: true });
     await writeFile(
       join(profileRoot, 'node_modules', SDK_SERVER_PACKAGE, 'package.json'),
       JSON.stringify({ name: SDK_SERVER_PACKAGE, version: SDK_SERVER_VERSION }),
     );
-    await symlink(logicalOwnRoot, join(profileRoot, 'node_modules', own.name), 'dir');
+    await symlink(logicalOwnRoot, join(profileRoot, 'node_modules', own.name), directoryLinkType);
     await writeFile(join(profileRoot, 'package.json'), '{}');
     await writeFile(join(profileRoot, 'cordis.yml'), '[]\n');
     await writeFile(join(profileRoot, 'cordis.patch.yml'), patchYamlFor());
@@ -374,7 +375,7 @@ describe('ensureSdkProfile', () => {
       join(profileRoot, '..', 'node_modules', SDK_SERVER_PACKAGE, 'package.json'),
       JSON.stringify({ name: SDK_SERVER_PACKAGE, version: SDK_SERVER_VERSION }),
     );
-    await symlink(own.root, join(profileRoot, 'node_modules', own.name), 'dir');
+    await symlink(own.root, join(profileRoot, 'node_modules', own.name), directoryLinkType);
     await writeFile(join(profileRoot, 'package.json'), '{}');
     await writeFile(join(profileRoot, 'cordis.yml'), '[]\n');
     await writeFile(join(profileRoot, 'cordis.patch.yml'), '[]\n');

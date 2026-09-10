@@ -271,7 +271,7 @@ describe('ServiceManager', () => {
     }
   });
 
-  it('cannot race an intent-aware guardian restart past an in-flight stop', async () => {
+  it('cannot race an intent-aware service restart past an in-flight stop', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-lark-manager-'));
     const controller = new FakeController();
     const manager = new ServiceManager({

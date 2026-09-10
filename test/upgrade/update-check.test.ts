@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   currentVersion,
   isNewer,
@@ -12,6 +12,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   resetUpdateCheckCache();
+});
+
+beforeEach(() => {
+  vi.stubEnv('DSH_LARK_UPGRADE_CHECK', '1');
 });
 
 describe('update-check', () => {
@@ -64,6 +68,14 @@ describe('update-check', () => {
     await expect(latestVersion({ probe, cacheMs: 0 })).resolves.toBeUndefined();
     await expect(latestVersion({ probe, cacheMs: 0 })).resolves.toBeUndefined();
     expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it('is disabled by default for the fork', async () => {
+    vi.unstubAllEnvs();
+    expect(upgradeCheckEnabled()).toBe(false);
+    const probe = vi.fn().mockResolvedValue('0.14.0');
+    await expect(latestVersion({ probe })).resolves.toBeUndefined();
+    expect(probe).not.toHaveBeenCalled();
   });
 
   it('respects DSH_LARK_UPGRADE_CHECK=0', async () => {

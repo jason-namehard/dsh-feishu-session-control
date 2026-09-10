@@ -1,191 +1,135 @@
 <h1 align="center">DSH Feishu Session Control</h1>
 
-<p align="center">🌏 <a href="README.md">中文</a> · 📦 <a href="docs/PROJECT_IDENTITY.md">Project identity and provenance</a></p>
+<p align="center">🇨🇳 <a href="README.md">中文</a> · 📦 <a href="docs/PROJECT_IDENTITY.md">Project identity and provenance</a></p>
 
 <p align="center">
-  <strong>Put DeepSeek Harness into Feishu</strong> · scan to connect in 30 s · drive your coding agent from your phone · Feishu still answers you if dsh crashes
+  <strong>Connect each Feishu chat to a controllable DSH session</strong><br>
+  Web sessions stay local by default · Feishu attaches on demand · half/full modes are switchable
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Feishu%20%2F%20Lark-3370FF" alt="Platform">
-  <img src="https://img.shields.io/badge/agent-DeepSeek%20Harness-4D6BFE" alt="Agent">
-  <img src="https://img.shields.io/badge/runtime-Node.js%20%E2%89%A5%2022-339933" alt="Node">
-  <img src="https://img.shields.io/badge/License-AGPLv3-blue" alt="License">
-  <img src="https://img.shields.io/badge/status-released-blue" alt="Status">
-</p>
-
-> **Provenance**: this project is a **fork** of [`PlutoKeating/dsh-lark-bot`](https://github.com/PlutoKeating/dsh-lark-bot)
-> (AGPL-3.0). The Feishu long connection, command routing, approval flow and workspace scaffolding come from
-> upstream; its copyright and AGPL-3.0 obligations continue to apply.
+> **Provenance**: this project is a **fork** of
+> [`PlutoKeating/dsh-lark-bot`](https://github.com/PlutoKeating/dsh-lark-bot) (AGPL-3.0). The Feishu persistent
+> connection, command routing, approval flow, and workspace scaffolding originate upstream; its copyright and
+> AGPL-3.0 obligations continue to apply.
 >
-> Added here, maintained by **见川**:
-> - **In-process transport to the dsh host**, replacing loopback HTTP — which also removes browser authentication,
->   RPC renaming and the event-mux endpoint from the compatibility surface entirely
-> - **Compatibility with dsh 0.1.2-rc.1's breaking changes** (see `docs/UPGRADE.md`)
-> - **`MMDD-N` alias session lifecycle**: `/sessions` `/use` `/rename` `/delete` `/purge`, across workspaces,
->   recycle bin before permanent deletion
-> - **Per-chat @-mention policy** `/mention`, layering per-group exceptions over the profile-wide default
-> - **`dsh-sessions-manager` (MIT) integrated into this package**, so no extra session plugins need installing
->
-> Full provenance and licensing: [`NOTICE.md`](NOTICE.md) and [`docs/PROJECT_IDENTITY.md`](docs/PROJECT_IDENTITY.md).
+> Maintained by **见川**, this repository adds in-process compatibility with DSH `0.1.2-rc.1`, cross-workspace
+> aliases, recycle-bin and permanent deletion, an integrated Web session manager, half/full Feishu attachment,
+> and a unified approval path that mirrors only native DSH approvals. See [`NOTICE.md`](NOTICE.md) and
+> [`docs/PROJECT_IDENTITY.md`](docs/PROJECT_IDENTITY.md).
 
-## Project Overview
+## Purpose
 
-The project name is **DSH Feishu Session Control**. The npm/DSH compatibility package name remains `dsh-lark-bot` so existing profiles keep working.
+This package combines the Feishu/Lark bridge, remote DSH session control, and Web session management. The npm/DSH
+package name remains `dsh-lark-bot` for compatibility; the project and repository are named
+**DSH Feishu Session Control / dsh-feishu-session-control**.
 
-Make DeepSeek Harness a member of your Feishu/Lark and drive your local coding agent directly from phone, group, or thread. It uses a Feishu WebSocket long connection, so you need **no public IP, domain, server, or NAT-tunnelling**; Linux / macOS / Windows, Node.js ≥ 22.
+- Uses Feishu's WebSocket connection; no public IP, domain, server, or tunnel is required.
+- Runs in the DSH host process and supports DSH `0.1.2-rc.1`.
+- Contains no Guardian: it never takes over, starts, or restarts DSH after DSH stops.
+- Sessions created in Web are detached from Feishu unless a Feishu chat explicitly attaches to them.
 
----
+## Session Semantics
 
-## Quick start
-
-**Prerequisites:** DeepSeek Harness (`dsh`) is installed with `DEEPSEEK_API_KEY` configured; Node.js ≥ 22.19; a Feishu / Lark account.
-
-```bash
-npx dsh-lark-bot@latest setup --profile dsh-lark   # ① one-command install (into a dsh profile + safety-net guardian by default)
-dsh web                                             # ② start DSH Web + the Feishu bridge in one foreground process
-```
-
-Do not start `dsh --profile dsh-lark` at the same time: that would create a second Feishu WebSocket consumer.
-
-③ On first start the terminal prints a QR code → scan it with the Feishu app to create / select a PersonalAgent
-app → once bound, message the bot directly; groups / threads default to `@bot`.
-
-- **Already have an app**: skip the scan with `DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu dsh web`.
-- **Upgrade**: `npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes`.
-
-> **No terminal needed**: an admin just sends `/upgrade` in Feishu.
-
----
-
-## Core capabilities
-
-**Unique to the ecosystem**
-
-- **Safety-net guardian**: Feishu still replies if dsh crashes; `/safemode` opens a core-only safe mode to self-heal, queued tasks are restored on restart, and `/jobs` retries explicitly. Most bridges are "serial single chat + lost on crash".
-- **Multi-bot trusted hand-off**: `bot add` adds independent instances and trusted bots hand off with a real @ in the same group, capped.
-- **Full workspace & session management**: an isolated git worktree is auto-created per session; `/session` lists / binds sessions, while `/sessions`, `/use`, `/delete`, and `/purge` manage named Web sessions from Feishu. `/archive` + `/retention` also keep the session list tidy.
-- **Robust version management**: an admin just sends `/upgrade` in Feishu to update, verify, and reload in the background; you're only nudged when a new version exists, with no interruption to current work.
-- **dsh Web visual settings**: point-and-click work dir, model, concurrency, and reminders in Settings → Plugins — no env vars to memorize.
-
-**Other core capabilities**
-
-- **Parallel tasks**: many tasks run concurrently in the same group with isolated sessions.
-- **Multi-role agents**: `/role` switches / assigns PM, dev, doc, etc., each with its own persona, model preference, and rules.
-- **In-chat model & key management**: one `/config` card to switch providers and hot-reload keys, without leaving Feishu.
-- **Quick / balanced / deep mode**: `/mode` picks the strength for the next turn without interrupting the current task.
-- **Plan gate for key tasks**: `lark_request_plan_approval` sends the full plan first, then approves or revises.
-- **Cross-session notify + @**: a task finishing in group A can push to group B / DM and @ you.
-- **Forward notifications to other IMs (notification-only)**: after `/channels` is configured, completion / failure / approval and urgent/fault notifications can be pushed one-way to Telegram / WeCom group robots and more. Push-only, no inbound interaction; Feishu stays the sole full-interaction platform and the default behavior is unchanged when no channel is configured. **`/channels add --qr <wechat|qq|telegram>` shows a QR code image in the Feishu session — scanning it with the matching IM app creates and binds the notification channel.**
-
-> Streaming process cards render in a native Feishu collapsible panel.
-
-## Command reference
-
-Command help, status, and cards are bilingual; `/help` is the full authoritative list. All commands are in [`docs/MANUAL.md`](docs/MANUAL.md).
-
-| Command | What it does |
+| Action | Result |
 | --- | --- |
-| `/config` | Model / provider / credential management card (`/model`, `/provider(s)`, `/key` are aliases of the same card) |
-| `/new` `/reset` | Start a new session |
-| `/status` | Status card (workspace / model / session / run / token / job ledger) |
-| `/mode` (`/effort`) | Pick quick / balanced / deep strength |
-| `/cd <path>` | Switch to an independent session in that directory |
-| `/ws list\|save\|use\|remove` | Manage named workspaces |
-| `/jobs [list\|show\|retry]` | Reconcile and retry queued/running/failed/interrupted jobs |
-| `/session`、`/session bind` | Browse / explicitly bind a DSH session |
-| `/sessions` | List DSH sessions and stable `MMDD-N` aliases |
-| `/use <alias>` | Open the confirmation card to switch to a named session |
-| `/delete <alias>` | Move a named session to the recoverable recycle bin after confirmation |
-| `/purge <alias>` | Permanently delete a named session after confirmation |
-| `/role list\|show\|set\|clear` | View / bind roles |
-| `/notify <scope\|chatId> <text>` | Cross-session notification (admin) |
-| `/notifications [show\|off\|on …]` | Configure completion / failure / approval / urgent reminders (`sinks=` forwards to other IM channels) |
-| `/channels [list\|show\|add\|accept\|remove\|enable\|disable …]` | Manage outbound notification channels (admin); `add --qr <wechat\|qq\|telegram>` is scan-to-bind |
-| `/stop` | Stop current tasks |
-| `/upgrade` | Self-update (admin) |
-| `/doctor` | Generate a redacted diagnostic bundle (admin) |
-| `/help` | Show the command list |
+| Create a session in Web | Remains detached; its messages and approvals stay in Web |
+| Send the first ordinary message in a Feishu chat | Creates a dedicated DSH session and attaches in **half** mode |
+| `/use 0909-1` | Switches this chat to that session without replaying history; mode resets to half |
+| `/switch` | Opens a card to select half or full attachment |
+| `/detach` | Removes only the Feishu attachment; the DSH session remains |
+| Stop DSH | Feishu disconnects with it; the plugin does not take over or relaunch DSH |
 
----
+**Half connection**: a Feishu-origin turn is fully visible in Web and its final answer returns to Feishu. A later
+turn started independently from Web/TUI is not copied to Feishu.
 
-> **Source notice**: this project is maintained by **见川** as a new integration and refactoring project based on
-> `PlutoKeating/dsh-lark-bot`, DeepSeek Harness, and `dsh-sessions-manager`. It is not the upstream repository and
-> does not represent the upstream author. The new GitHub repository address will be configured before publication.
-> This project never ships a Windows `.exe` or a "download & run" installer.
+**Full connection**: Web/TUI-origin messages and replies in the attached session are also copied to the current
+Feishu chat.
 
-## FAQ
+## Quick Start
 
-**Q: How do I connect DeepSeek Harness to Feishu?**
-**A:** With Node ≥ 22 and dsh installed (and `DEEPSEEK_API_KEY` set), run `npx dsh-lark-bot@latest setup --profile dsh-lark`, then `dsh web` and scan the QR code. DM the bot directly; groups / threads default to `@bot`.
-
-**Q: Do I need a public IP, domain, or server?**
-**A:** No. Feishu uses a WebSocket long connection (outbound), so it works behind NAT — no public server, domain, or NAT-tunnelling.
-
-**Q: How is this different from other DeepSeek Harness Feishu plugins?**
-**A:** The most complete feature set: safety-net guardian, parallel tasks, multi-role agents, multi-bot hand-off, persistent job ledger, session archive, cross-session notify, dsh Web visual settings, in-chat model & key management, execution modes, plan gate, and in-Feishu self-update. It's a standard dsh profile bundle and `setup` is the only install path.
-
-**Q: Where are the source and license notices?**
-**A:** This project is maintained by 见川. Upstream and third-party source notices are listed in [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES).
-
----
-
-## Compatibility
-
-- **DeepSeek Harness (`dsh`)**: verified against **0.1.0-rc.8** (2026-08-25) via the official `@deepseek-ai/dsh-sdk-client` / `dsh-acp`; locked versions & upgrade policy in [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
-- **Runtime**: Node.js ≥ 22.19; **Platforms**: Linux / macOS / Windows. Default adapter `web` (the local dsh Web session); switchable to `sdk` / `acp` / `headless`.
-
-## Configuration
-
-- **Recommended**: local dsh Web → **Settings → Plugins → dsh-lark-bot** to view / edit service region, App ID, App Secret, work dir, default model, concurrency, adapter, and reminders; App Secret is write-only.
-- Or use `/config`, `/providers`, `/provider`, `/key` in Feishu to inspect / write providers, models, and credentials (admin-only).
-- Env vars use the `DSH_LARK_*` prefix; state root is `~/.dsh-lark`; template in [`.env.example`](.env.example); full env-var matrix in [`docs/MANUAL.md`](docs/MANUAL.md) §9.
-
-> Behavior details (crash reconciliation, session isolation, plan gate, per-tool approval, multi-bot hand-off, safety-net guardian) are in [`docs/FEATURES.md`](docs/FEATURES.md);
-> permissions & data in [`docs/MANUAL.md`](docs/MANUAL.md) §6 and [`SECURITY.md`](SECURITY.md).
-
-## Security & licensing
-
-- **License**: GNU AGPL-3.0 (see [`LICENSE`](LICENSE)). Open source and self-hostable, free for personal / internal use; **commercial / SaaS / closed-source reuse needs a separate license**.
-- **Security**: default-deny, secret redaction, path containment, SSRF protection, stale-event rejection, interaction tools disabled by default — see [`SECURITY.md`](SECURITY.md); report vulnerabilities privately via GitHub Security Advisory.
-
-## Upgrade & uninstall
+Prerequisites: Node.js 22 or newer, DeepSeek Harness, a configured model/API key, and a Feishu/Lark custom app.
 
 ```bash
-npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes   # upgrade (or admin /upgrade in Feishu)
+git clone https://github.com/jason-namehard/dsh-feishu-session-control.git
+cd dsh-feishu-session-control
+corepack enable
+pnpm install
+pnpm build
+node bin/dsh-lark-bot.mjs setup --profile dsh-lark --package file:/absolute/path/to/dsh-feishu-session-control
+dsh --profile web
 ```
 
-- **Disable**: export `DSH_LARK_DISABLED=1` before starting the profile (plugin stays loaded, bridge engine stops).
-- **Uninstall**: `dsh plugin --profile dsh-lark remove dsh-lark-bot`; local state (config / sessions / archives / roles) stays in `~/.dsh-lark`.
+On Windows, the local package spec can look like
+`file:E:/Vibecoding-Mirasim/dsh-feishu-session-control`. `setup` installs the same integrated package into the
+bridge profile and the `web` profile. Bind the app using the QR code printed at first start, or provide
+`DSH_LARK_APP_ID`, `DSH_LARK_APP_SECRET`, and `DSH_LARK_TENANT`.
 
----
+> This fork is not yet published under an independent npm package name. Do not run `npx dsh-lark-bot@latest`;
+> that name resolves to the upstream project.
 
-## About the project
+See [`docs/QUICK_START.md`](docs/QUICK_START.md) for details.
 
-- **Development**: `pnpm install && pnpm typecheck && pnpm test && pnpm build`; delivery standards in [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md), AI-agent workflow in [`AGENTS.md`](AGENTS.md). Dual-package publish `pnpm publish:dual` (`dsh-lark-bot` + `dsh-feishu-bot`, shared dist).
-- **Maintainer**: **见川**.
-- **Source and licenses**: see [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES).
-- **Contributors**: [zhuguangjun2002](https://github.com/zhuguangjun2002) · [chensimo1992-sys](https://github.com/chensimo1992-sys) · [estelledc](https://github.com/estelledc) · [fredjiangyysx](https://github.com/fredjiangyysx) · [Geoffrey-hougaojie](https://github.com/Geoffrey-hougaojie) · [hellxiaoao](https://github.com/hellxiaoao) · [koprivnikarurnaa-oss](https://github.com/koprivnikarurnaa-oss) · [Normanyin](https://github.com/Normanyin) · [pancong0711](https://github.com/pancong0711) · [qvivp](https://github.com/qvivp).
-- **Docs**: `QUICK_START` (install / quick start) · `MANUAL` (full manual + commands + env vars) · `FEATURES` (capability behavior) · `COMPATIBILITY` · `ARCHITECTURE` · `API` · `roadmap`.
+## Main Commands
 
-## Related ecosystem
+| Command | Purpose |
+| --- | --- |
+| `/sessions` | List sessions across workspaces with `MMDD-N` aliases, titles, state, and the current-chat marker |
+| `/new [name]` | Create a session; without a name, open a form that also accepts an empty value |
+| `/use <alias>` | Attach an existing session without history replay |
+| `/switch` | Select half or full attachment |
+| `/detach` | Detach this Feishu chat from its session |
+| `/rename <alias> [name]` | Rename the DSH session and synchronize the Web UI title |
+| `/delete <alias>` | Move to the recycle bin after confirmation; aliases are never renumbered |
+| `/purge <alias>` | Permanently delete after confirmation |
+| `/mention on\|off\|default [chatId]` | Configure whether a group requires an `@` mention |
+| `/status` | Show the current scope, session, attachment, and task state |
+| `/upgrade` | Run a confirmed update inside the current DSH process |
 
-| Platform | Status |
-| :--- | :--- |
-| [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) | ✅ listed ([#1408](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/1408)) |
-| [awesome-dsh-plugins](https://github.com/AdamPlatin123/awesome-dsh-plugins) | ✅ listed · runtime-verified |
-| dshfind / dshbase / dsh-plugin.org | Historical upstream listings; re-register this project after publication |
-| [omdsh-dev/community](https://github.com/orgs/omdsh-dev/discussions/11) | ✅ accepted · active |
+Use `/help` for the complete catalog. See [`docs/SESSION_MANAGEMENT.md`](docs/SESSION_MANAGEMENT.md) for lifecycle
+details.
 
-## Security notice
+## Approval Model
 
-> On 2026-08-17 a fake repo **`tarraencompassing61/dsh-lark-bot`** was found: a non-fork re-upload, 113 of 114
-> commits authored as PlutoKeating, all CI removed, Issues closed, 0 Releases, yet posing as the official
-> distribution with a "download Windows exe & run" README. **This project never ships an exe; any such download is fake / malicious.**
->
-> Evidence archive: [`docs/security/2026-08-17-impostor-repo-evidence/`](docs/security/2026-08-17-impostor-repo-evidence/README.md) ·
-> Historical upstream download and evidence notes: [`docs/DOWNLOAD.md`](docs/DOWNLOAD.md) · Ongoing monitor: `pnpm security:monitor`.
+The plugin adds **no per-tool approval gate or custom permission policy**. It mirrors an approval to Feishu only
+after DSH itself has requested one:
 
-## Disclaimer
+- Web and Feishu represent the same approval request.
+- Approval from either side is sufficient (OR semantics).
+- A detached Web session is not forced into Feishu.
+- DSH still decides when a dangerous operation or a genuine plan choice needs confirmation.
 
-> This is an unofficial community tool, unaffiliated with and not endorsed by DeepSeek or ByteDance / Feishu (Lark). DeepSeek Harness, Feishu / Lark, and related trademarks belong to their respective owners.
+Tools such as `pwsh` and `write` therefore do not gain an extra approval layer merely because the task came from
+Feishu.
+
+## Group Chats
+
+A normal group chat maps to one shared session. Only new message events are processed; the bridge does not inject
+the complete group history on every turn. To reply without `@`, grant the application-identity permission
+`im:message.group_msg` in the Feishu developer console and run `/mention off`. Use `/mention on` for groups that
+should remain mention-only.
+
+## Web Session Manager
+
+The integrated panel supports archive, restore, recycle bin, permanent deletion, details, favorites, and moving
+sessions across workspaces. Web exposes permanent deletion only inside the recycle bin. Feishu keeps
+`/purge <alias>` and always requires a second confirmation.
+
+## Development
+
+```bash
+pnpm install
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+On Windows without Developer Mode, tests that create directory symlinks may fail with `EPERM`; POSIX `0600` mode
+assertions are also not meaningful on Windows. The core session, approval, and in-process upgrade suites do not
+depend on those platform features.
+
+## License
+
+- Main license: [`LICENSE`](LICENSE) (GNU AGPL-3.0)
+- Upstream and third-party notices: [`NOTICE.md`](NOTICE.md)
+- Integrated `dsh-sessions-manager` MIT license:
+  [`THIRD_PARTY_LICENSES/dsh-sessions-manager-MIT.txt`](THIRD_PARTY_LICENSES/dsh-sessions-manager-MIT.txt)

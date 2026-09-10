@@ -546,4 +546,42 @@ describe('SessionProjectionBridge', () => {
     expect(requiredStore.ownerOf('s1')?.lastProjectedSeq).toBe(-1);
     await requiredBridge.close();
   });
+
+  it.each([['half', 0], ['full', 2]] as const)(
+    '%s connection controls Web-origin mirroring',
+    async (connectionMode, expectedCards) => {
+      const root = await mkdtemp(join(tmpdir(), `dsh-lark-projection-${connectionMode}-`));
+      const store = new SessionProjectionStore(join(root, 'projection.json'));
+      await store.load();
+      await store.bindExclusive({
+        scope: 'chat-a', workspaceCwd: '/repo', sessionId: 's1', chatId: 'chat-a',
+        initialSeq: -1, connectionMode,
+      });
+      const source = new FakeSource();
+      source.events.set('s1', [
+        { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+        {
+          type: 'user/message', seq: 1, time: 1,
+          data: {
+            id: 'web-user', role: 'user', content: [{ type: 'text', text: 'from Web' }],
+            source: { kind: 'user', client: 'web' },
+          },
+        },
+        assistant(2, 'web-assistant', 'reply from Web', 1),
+        { type: 'turn/end', seq: 3, time: 3, data: { turn: 1, reason: { kind: 'completed' } } },
+      ]);
+      const sendCard = vi.fn(async () => `card-${sendCard.mock.calls.length}`);
+      const bridge = new SessionProjectionBridge({
+        source, store, channel: { sendMarkdown: vi.fn(), sendCard, updateCard: vi.fn() },
+        limits: {
+          backfillMessages: 20, backfillBytes: 10_000, historyPageMessages: 100,
+          streamUpdateMs: 1, reconnectMs: 1,
+        },
+      });
+      await bridge.start();
+      expect(sendCard).toHaveBeenCalledTimes(expectedCards);
+      expect(store.ownerOf('s1')?.lastProjectedSeq).toBe(3);
+      await bridge.close();
+    },
+  );
 });

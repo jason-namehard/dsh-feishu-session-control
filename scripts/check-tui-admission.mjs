@@ -30,7 +30,7 @@ assert(Array.isArray(manifest.permissions), 'permissions must be declared');
 assert(Array.isArray(manifest.subscriptions), 'subscriptions must be declared');
 assert(Array.isArray(manifest.contributes?.commands), 'contributes.commands must be declared');
 assert(manifest.license === 'AGPL-3.0', 'project license must remain AGPL-3.0');
-assert(manifest.source?.repository === 'https://github.com/PlutoKeating/dsh-lark-bot',
+assert(manifest.source?.repository === 'https://github.com/jason-namehard/dsh-feishu-session-control',
   'source repository must identify this project');
 
 const artifact = manifest.artifact;

@@ -65,29 +65,12 @@ export interface RuntimeEnv {
    * work silently, deliver one result — is the default.
    */
   progressCard: boolean;
-  /** Bridge engine heartbeat interval (guardian liveness signal), default 5000. */
-  heartbeatMs: number;
-  /** Guardian disabled switch (DSH_LARK_GUARDIAN_DISABLED=1 keeps it stopped). */
-  guardianDisabled: boolean;
   /** Push a Feishu update notification when a newer version is found (DSH_LARK_UPGRADE_NOTIFY=1; default off, log-only). */
   upgradeNotify: boolean;
   /** Chat to receive update notifications (DSH_LARK_UPGRADE_NOTIFY_CHAT); required for `upgradeNotify`. */
   upgradeNotifyChat: string | undefined;
   /** How often the bridge checks for a newer version (DSH_LARK_UPGRADE_CHECK_INTERVAL_MS, default 6h; 0 disables). */
   upgradeCheckIntervalMs: number;
-  /** dsh profile the guardian watches / relaunches (default `dsh-lark`). */
-  guardianProfile: string;
-  /** Bridge state profile providing Feishu credentials (default `default`). */
-  guardianBridgeProfile: string;
-  /** Guardian watchdog poll interval, default 2000. */
-  guardianPollMs: number;
-  /** Heartbeat staleness threshold before takeover, default 15000. */
-  guardianStaleMs: number;
-  /**
-   * When a dsh process is alive but the bridge heartbeat has been stale for
-   * longer than this, treat the engine as dead and take over (default 120000).
-   */
-  guardianEngineDeadMs: number;
   /** SDK liveness ping timeout (s) before a stuck WebSocket is reconnected, default 30. */
   channelPingTimeoutSec: number;
   /** App-level keepalive watchdog for the Feishu channel, default true. */
@@ -111,12 +94,6 @@ const DEFAULTS = {
   retentionMsgs: 40,
   archiveMax: 50,
   archiveMaxAgeDays: 90,
-  heartbeatMs: 5_000,
-  guardianPollMs: 2_000,
-  guardianStaleMs: 15_000,
-  guardianEngineDeadMs: 120_000,
-  guardianProfile: 'dsh-lark',
-  guardianBridgeProfile: 'default',
   upgradeNotify: false,
   upgradeCheckIntervalMs: 6 * 60 * 60_000,
   channelPingTimeoutSec: 30,
@@ -369,37 +346,12 @@ export function loadRuntimeEnv(
     eventFreshnessMs: parseFreshness(source.DSH_LARK_EVENT_FRESHNESS_MS),
     showThinking: source.DSH_LARK_SHOW_THINKING === '1',
     progressCard: source.DSH_LARK_PROGRESS_CARD === '1',
-    heartbeatMs: parsePositiveIntMin(
-      source.DSH_LARK_HEARTBEAT_MS,
-      DEFAULTS.heartbeatMs,
-      'DSH_LARK_HEARTBEAT_MS',
-    ),
-    guardianDisabled: parseBoolean(source.DSH_LARK_GUARDIAN_DISABLED, false),
     upgradeNotify: parseBoolean(source.DSH_LARK_UPGRADE_NOTIFY, false),
     upgradeNotifyChat: nonEmpty(source.DSH_LARK_UPGRADE_NOTIFY_CHAT),
     upgradeCheckIntervalMs: parsePositiveInt(
       source.DSH_LARK_UPGRADE_CHECK_INTERVAL_MS,
       DEFAULTS.upgradeCheckIntervalMs,
       'DSH_LARK_UPGRADE_CHECK_INTERVAL_MS',
-    ),
-    guardianProfile:
-      nonEmpty(source.DSH_LARK_GUARDIAN_PROFILE) ?? DEFAULTS.guardianProfile,
-    guardianBridgeProfile:
-      nonEmpty(source.DSH_LARK_GUARDIAN_BRIDGE_PROFILE) ?? DEFAULTS.guardianBridgeProfile,
-    guardianPollMs: parsePositiveIntMin(
-      source.DSH_LARK_GUARDIAN_POLL_MS,
-      DEFAULTS.guardianPollMs,
-      'DSH_LARK_GUARDIAN_POLL_MS',
-    ),
-    guardianStaleMs: parsePositiveIntMin(
-      source.DSH_LARK_GUARDIAN_STALE_MS,
-      DEFAULTS.guardianStaleMs,
-      'DSH_LARK_GUARDIAN_STALE_MS',
-    ),
-    guardianEngineDeadMs: parsePositiveIntMin(
-      source.DSH_LARK_GUARDIAN_ENGINE_DEAD_MS,
-      DEFAULTS.guardianEngineDeadMs,
-      'DSH_LARK_GUARDIAN_ENGINE_DEAD_MS',
     ),
     channelPingTimeoutSec: parsePositiveIntMin(
       source.DSH_LARK_CHANNEL_PING_TIMEOUT_SEC,

@@ -1,161 +1,179 @@
-# DSH飞书Session控制
+# Session 管理规范
 
-本项目正式名称为 **DSH飞书Session控制**，npm/DSH 兼容包名仍为 `dsh-lark-bot`。
+最后核对日期：2026-09-09。
 
-## 单包整合
+## 1. 三类状态
 
-一个 `dsh-lark-bot` 包现在包含：
+### DSH session
 
-- 飞书/Lark WebSocket 远程桥接；
-- `MMDD-N` 稳定 session 别名、`/sessions`、`/use`、`/delete`、`/purge`、`/new`；
-- DSH Web 会话管理面板；
-- Web 端归档、恢复、回收站、永久清理、详情、收藏和跨工作区移动；
-- `/__chameleon/session/delete` 兼容路由，供飞书 Web adapter 使用；
-- Guardian 安全网守护。
+真实对话由 DSH 管理，包含 transcript、标题、工作空间、运行状态和回收站状态。插件不复制或改写其内部
+存储，只通过 DSH 提供的服务读取和执行生命周期操作。
 
-不再需要单独安装 `dsh-sessions-manager`、`dsh-plugin-session-delete` 或
-`dsh-archived-sessions`。Web 端整合代码及其 MIT 许可证位于
-`src/integrated/session-manager/` 和 `THIRD_PARTY_LICENSES/`。
+### 飞书 scope 映射
 
-## 安装到两个 profile
+`sessions.json` 记录某个飞书 scope 在某个工作空间当前使用哪个 DSH session。首次飞书普通消息会创建
+这一映射；Web 创建 session 不会创建它。
 
-飞书桥接运行在 `dsh-lark`，Web 会话管理面板运行在 `web`。推荐使用统一安装命令，自动把同一
-项目包写入两个 profile：
+### 飞书连接
 
-```bash
-npx dsh-lark-bot@latest setup --profile dsh-lark
+`session-projections.json` 记录 session 是否连接到某个飞书聊天、连接模式和事件游标。它决定 Web/TUI
+事件是否抄送飞书，不决定 DSH session 是否存在。
+
+## 2. 稳定别名
+
+默认工作区根目录的 `.session_aliases.json` 保存：
+
+```json
+{
+  "0909-1": "session-uuid-a",
+  "0909-2": "session-uuid-b"
+}
 ```
 
-等价的底层操作是：
+生成规则：
 
-```bash
-dsh plugin --profile dsh-lark add dsh-lark-bot@<version>
-dsh plugin --profile web add dsh-lark-bot@<version>
-```
+1. 使用本机日期 `MMDD`；
+2. 查找同日前缀的最大序号；
+3. 新别名使用 `max + 1`；
+4. 删除别名后不复用、不重排其他编号。
 
-只安装桥接时使用 `setup --no-web`；非默认 Web profile 使用 `setup --web-profile <name>`。
+已有 DSH session 第一次被 `/sessions` 同步时也会获得别名。
 
-在 Web profile 中，包只挂载会话管理能力，不启动第二个飞书桥接引擎。
+## 3. Web 与飞书的默认关系
 
-## 生命周期
+### Web 创建
 
-Web 管理器采用三层生命周期：
+Web 创建的 session 默认完全独立：
 
-- **归档**：隐藏 session，可恢复；
-- **删除**：进入回收站，可恢复；
-- **永久清理**：从回收站彻底移除，不可恢复。
+- 不建立飞书 scope 映射；
+- 不建立飞书连接；
+- Web 消息和回复不发送到飞书；
+- DSH 原生审批留在 Web，除非以后显式连接到某个飞书聊天。
 
-当前飞书 `/delete <MMDD-N>` 在二次确认后移入回收站，别名保留，便于后续恢复或永久清理。
-`/purge <MMDD-N>` 在二次确认后永久清理，该操作不可恢复。Web 端仍提供回收站中的恢复、批量
-操作和永久清理能力。
+### 飞书首次消息
 
-## Web adapter
+一个尚未映射的飞书聊天发送普通消息时：
 
-`web` adapter 不是飞书连接方式，而是让桥接通过本机 DSH Web host 的 HTTP RPC
-和 `/api/events.mux` WebSocket 续接原生 DSH session。使用前需要：
+- 创建新的 DSH session；
+- 注册稳定别名；
+- 建立半衔接；
+- 该消息在 DSH Web 内可见；
+- 最终结果返回原飞书聊天。
 
-1. 启动 DSH Web profile；
-2. 确认 Web host 地址可访问，默认是 `http://127.0.0.1:3080`；
-3. 在 `dsh-lark-bot` 设置中选择 `web` adapter，并保存。
+## 4. `/sessions`
 
-如果只需要独立的飞书桥接而不需要复用 DSH Web 原生 session，可显式设置 `DSH_LARK_ADAPTER=sdk`；
-当前默认是 `web`，这样 Web 与飞书共享同一个 DSH session 写入者。
+输出跨工作空间会话，格式包含：
 
-## 飞书进度提示：表情回复代替进度卡片
+- `MMDD-N` 别名；
+- DSH 原生标题；
+- 空闲、运行中或回收站状态；
+- 当前聊天正在使用的 session；
+- 当前连接为半衔接或完整衔接。
 
-手机上一次任务原本会占掉一张不断刷新的大卡片，把真正要看的结论挤到很远。
-目标形态是：**你的消息 + 一条结果**，中间不额外占位。
+“当前对话”优先读取 projection 连接；若首次消息已运行但连接记录尚未由手工命令确认，则回退读取
+run-flow 的 session 映射。这样新群聊首次对话后也能准确标出当前 session。
 
-做法是给「你发的那条消息」加一个表情回复作为已读确认，不再发进度卡片：
+## 5. `/new [名称]`
 
-- 收到消息 → 在你的消息上加 `OnIt` 表情（表示已看到、正在做）
-- 执行中 → 不发任何消息
-- 完成 → 清掉表情，发一条最终结果
-- 出错或需要你决策 → 才发卡片
+`/new 项目排查`：立即创建并使用该标题。
 
-### 需要开的飞书权限
+`/new`：创建 session 后发送名称输入卡。允许空值提交：
 
-表情回复要一个额外权限，请在飞书开放平台为该应用开启：
+- 非空：调用 DSH 原生 rename，同步到 Web UI；
+- 空值：保留 DSH 的默认命名规则。
 
-```text
-im:message.reactions:write_only    发送、删除消息表情回复
-```
+新 session 自动得到别名并以半衔接连接当前聊天。
 
-路径：开放平台 → 你的应用 → 权限管理 → 搜索「表情回复」→ 勾选「发送、删除
-消息表情回复」→ 发布版本并等待生效。
+## 6. `/use <别名>`
 
-注意权限码是复数 `reactions` 且后缀是 `write_only`，不是 `reaction:write`。
+流程：
 
-已实测（2026-09-07，真实应用凭据 + 真实会话）：拿 tenant token、列消息、
-`POST /im/v1/messages/{id}/reactions` 加表情、`DELETE .../reactions/{rid}`
-删表情，四步全部返回 `code=0`。测试用的表情已清理。
+1. 检查别名和目标 session；
+2. 拒绝连接回收站中的 session；
+3. 显示目标标题、工作空间和归属信息；
+4. 用户点击确认；
+5. 原子迁移连接并设置为半衔接；
+6. 发送完成状态并撤回确认卡。
 
-没开也不会坏：`addReaction` 是 best-effort，权限不足时飞书返回非零 code，
-桥接只记一条 warn 日志并退回原来的进度提示，不会让这一轮任务失败。这一点
-有测试固定（见 `test/bridge/lark-reaction.test.ts`）。
+`/use` **不回填 transcript**。连接游标从确认时的最新序号开始，之后只处理新事件。
 
-### 已生效
+同一个 DSH session 只能连接一个飞书 scope。普通用户需在旧聊天 `/detach`；管理员可在确认卡披露旧 owner
+后迁移。
 
-安静模式现在是默认行为，`DSH_LARK_PROGRESS_CARD=1` 可以换回进度卡片。
+## 7. `/switch`
 
-之所以能安全摘掉卡片：最终答案本来就有独立投递路径，它是用 `sendMarkdown`
-单独发的，不只存在于卡片里。中间气泡被抑制后 `interim.delivered` 为空，于是
-「尚未送出的尾巴」正好等于完整答案——一条消息，不是一串碎片。
+`/switch` 不接参数，发送两个模式按钮。
 
-失败路径需要额外处理：卡片原来负责显示错误，摘掉之后失败会变成**沉默**，
-而沉默和「还在跑」在手机上完全无法区分——这恰恰是已读确认最不能造成的误解。
-所以安静模式下非正常结束会补发一条简短消息（已中断 / 超时 / 执行失败）。
+### 半衔接 `half`
 
-审批卡、提问卡、计划卡不受影响：它们本来就是独立消息，不走运行卡片。
+- 飞书消息进入 DSH Web；
+- 针对该飞书消息产生的回复返回飞书；
+- Web/TUI 之后独立发起的新回合不抄送飞书。
 
-## session 命令的数据来源（进程内）
+### 完整衔接 `full`
 
-`/sessions`、`/use`、`/delete`、`/purge` 需要 DSH 自己的会话列表。作为插件跑在
-dsh 里时，这些数据直接从宿主服务读，不再走它自己的 HTTP API：
+- 保留半衔接行为；
+- Web/TUI 发起的新消息和回复也抄送飞书。
 
-| 能力 | 来源 |
-| :--- | :--- |
-| 会话列表 | `sessionPersistence.list()`（含未 live 的会话） |
-| 标题补全 | `sessionQuery.readTitleSnapshot()` |
-| 运行中标记 | `ctx.sessions.list()` |
-| 历史回填 | `sessionPersistence.readFrom()` |
-| 实时事件 | `ctx.on('session/event')` |
-| 发消息 | `agent.followup()` |
-| 新建会话 | `ctx.agents.create()` |
-| 回收站 / 彻底删除 | 本项目自己注册的 `/__chameleon/session/{delete,purge}` |
+卡片点击后必须显示终态并撤回原选择卡，不能保留“仍待选择”的外观。
 
-最后一行是刻意的例外：这两个路由不在 `/api` 前缀下，不受 dsh 的浏览器认证围栏
-影响，在 0.1.2-rc.1 上依然可用；而回收站索引、墓碑记录和路径安全检查都集中在
-`src/integrated/session-manager`，没必要再实现第二份。
+## 8. `/detach`
 
-只列 live 会话是不够的——用户切走的会话仍然可选，但已经不 live 了，所以列表以
-持久化层的 header 为准。
+`/detach` 只做两件事：
 
-回收站读不到时按空处理：丢掉一个 trashed 标记是可恢复的，把整个列表打空不是。
+1. 删除当前飞书连接；
+2. 清除当前 scope 的 session 指针。
 
-实测：DSH 启动后 `session-projection` 记录 `mux-connected`，无任何错误；此前这个
-category 每 5 秒刷一次 `web mux websocket connection failed`。
+不会归档、回收或删除 DSH session。下一条飞书普通消息会创建新的独立 session；原 session 仍可在 Web
+继续使用，也可再次 `/use`。
 
-## 飞书侧的权限与电脑端对等
+## 9. `/rename <别名> [名称]`
 
-DSH 在电脑端的会话设置是 `permission/preset: danger-full-access` +
-`approval/policy: never`——它自己什么都不问。飞书侧之所以反复弹批准，是**桥接
-额外加的 plan-gate**，不是 DSH 在拦。
+有名称时直接重命名；没有名称时打开输入卡。重命名调用 DSH 原生接口，因而：
 
-`isHighRiskTool` 的判定范围包括 `run_code`、非简单 shell 命令、终端/diff 类
-工具，以及 `edit` / `delete` / `move` / `execute` 类操作——几乎覆盖所有真正
-干活的动作，所以一个多步任务会被打断很多次。
+- `/sessions` 显示新名称；
+- DSH Web UI 同步显示新名称；
+- 别名保持不变。
 
-关掉它即可获得与电脑端对等的权限：
+## 10. 回收站与永久删除
 
-```text
-DSH_LARK_PLAN_GATE=off
-```
+### `/delete <别名>`
 
-已写入 `启动DSH.bat` 和 `dsh-tray.ps1`，两条启动路径都生效。
+- 先显示别名和真实标题；
+- 仅确认后调用 DSH trash；
+- session 进入回收站，可从 Web 恢复；
+- 别名保留；
+- 当前连接和 scope session 指针被清除。
 
-需要清楚代价：这一层原本是为「手机丢了怎么办」准备的——飞书是远程入口，
-gate 关掉后，任何能用你飞书的人就拥有和坐在这台电脑前一样的能力。这是
-deployment 层面的取舍，不是代码缺陷。想恢复只需删掉那一行，或设为 `strict`。
+### `/purge <别名>`
 
-工具层的策略拒绝（`checkPermissionPolicy`）不受影响，仍然生效。
+- 必须二次确认；
+- 调用 DSH permanent purge；
+- 删除连接、scope session 指针和别名；
+- 不可恢复。
+
+Web UI 只在回收站中提供“彻底删除”，避免正常列表出现高风险按钮。
+
+## 11. 卡片安全
+
+确认卡具备：
+
+- 发起人绑定；
+- scope/chat/thread 绑定；
+- workspace 与 session 绑定；
+- 一次性 nonce；
+- 默认 10 分钟有效期；
+- owner 变化检测。
+
+成功、取消和失败都会产生清晰终态，随后撤回原卡。旧卡再次点击只返回已过期或已处理，不会重复执行。
+
+## 12. 数据文件
+
+| 文件 | 是否包含 DSH transcript | 用途 |
+| --- | --- | --- |
+| `<workspace>/.session_aliases.json` | 否 | 别名到 sessionId |
+| `profiles/<profile>/sessions.json` | 否 | 飞书 scope 的当前 session |
+| `profiles/<profile>/session-projections.json` | 否 | 飞书连接和事件游标 |
+| DSH 自己的 session 存储 | 是 | 真实对话，由 DSH 管理 |
+
+因此删除插件映射不会直接删除 DSH transcript；只有 DSH trash/purge 接口改变真实 session 生命周期。

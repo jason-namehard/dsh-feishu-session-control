@@ -4,7 +4,7 @@ import { sanitizeServicePath } from '../../src/platform/path.js';
 describe('sanitizeServicePath', () => {
   it('prepends the node bin dir and drops transient npm/npx bins', () => {
     const path = sanitizeServicePath('/opt/node/bin/node', [
-      '/tmp/guardian/update-worker/npm-cache/request/_npx/hash/node_modules/.bin',
+      '/tmp/channel-update/npm-cache/request/_npx/hash/node_modules/.bin',
       '/workspace/node_modules/.bin',
       '/opt/node/bin',
       '/home/user/.local/bin',

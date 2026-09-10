@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { ChannelUpdateController } from '../../src/upgrade/channel-update.js';
 
 describe('ChannelUpdateController', () => {
-  it('binds an available-version offer to its scope and administrator before handing it to guardian', async () => {
+  it('binds an available-version offer to its scope and administrator before starting the updater', async () => {
     const start = vi.fn().mockResolvedValue({ accepted: true, id: 'update-1' });
     const controller = new ChannelUpdateController({
       current: '0.18.0', probe: vi.fn().mockResolvedValue('0.19.0'),
-      handoff: { start }, id: () => 'offer-1', now: () => 1_000,
+      updater: { start }, id: () => 'offer-1', now: () => 1_000,
     });
     const offer = await controller.check({ scope: 'chat-a', actorId: 'ou_admin' });
 
@@ -30,7 +30,7 @@ describe('ChannelUpdateController', () => {
     const start = vi.fn();
     const controller = new ChannelUpdateController({
       current: '0.18.0', probe: vi.fn().mockResolvedValue('0.19.0'),
-      handoff: { start }, id: () => 'offer-cancel',
+      updater: { start }, id: () => 'offer-cancel',
     });
     await controller.check({ scope: 'chat-a', actorId: 'ou_admin' });
     const input = {
@@ -43,10 +43,10 @@ describe('ChannelUpdateController', () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the guardian worker cannot be launched', async () => {
+  it('fails closed when the in-process updater cannot be started', async () => {
     const controller = new ChannelUpdateController({
       current: '0.18.0', probe: vi.fn().mockResolvedValue('0.19.0'),
-      handoff: { start: vi.fn().mockRejectedValue(new Error('spawn failed')) },
+      updater: { start: vi.fn().mockRejectedValue(new Error('start failed')) },
       id: () => 'offer-failed',
     });
     await controller.check({ scope: 'chat-a', actorId: 'ou_admin' });

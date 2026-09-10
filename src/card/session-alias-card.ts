@@ -92,6 +92,117 @@ function safe(value: string, maxBytes: number): string {
 }
 
 /**
+ * Pick one session out of several whose titles all matched what was typed.
+ *
+ * `/use DSH` can legitimately match more than one session. Answering that with a
+ * thrown error line left the reader holding aliases to retype — on a phone, that
+ * means reading an alias off one message and typing it into another. Every
+ * candidate becomes its own full-width row, so the choice is a tap.
+ *
+ * Rows rather than a row of side-by-side buttons: a `column_set` folds its
+ * overflow into a "more" menu once it holds more than a couple of columns, which
+ * hides exactly the options the card exists to show. One element per line has no
+ * such limit.
+ *
+ * Picking still leads to the ordinary confirmation card — this card only
+ * answers "which session did you mean", never "rebind now" — and the cancel
+ * button abandons the pick without touching the binding.
+ */
+export function renderSessionCandidateCard(input: {
+  /** What the operator typed; omitted by bare `/use`, which lists everything. */
+  argument?: string;
+  candidates: ReadonlyArray<{ sessionId: string; alias?: string; title?: string }>;
+  scope: string;
+  workspaceCwd: string;
+  actorId: string;
+  /** Candidates past this many are omitted from the card entirely. */
+  maxButtons?: number;
+}): object {
+  const maxButtons = input.maxButtons ?? 20;
+  const shown = input.candidates.slice(0, maxButtons);
+  const body = (locale: CardLocale) => {
+    const zh = locale === 'zh_cn';
+    const heading = input.argument === undefined
+      ? (zh
+        ? `**选择一个会话绑定到本对话**（共 ${input.candidates.length} 个）`
+        : `**Pick a session to bind to this chat** (${input.candidates.length} available)`)
+      : (zh
+        ? `**\`${safe(input.argument, 64)}\` 匹配到 ${input.candidates.length} 个会话，请选一个**`
+        : `**\`${safe(input.argument, 64)}\` matches ${input.candidates.length} sessions — pick one**`);
+    const omitted = input.candidates.length - shown.length;
+    return {
+      elements: [
+        {
+          tag: 'markdown',
+          content: [
+            heading,
+            '',
+            zh
+              ? '选择后会再弹一张确认卡，确认前不会改变绑定。'
+              : 'Picking opens the usual confirmation card; nothing is rebound until you confirm it.',
+            ...(omitted > 0
+              ? [zh
+                ? `（卡片最多显示 ${maxButtons} 个；其余请用完整 session id）`
+                : `(the card shows at most ${maxButtons}; use a full session id for the rest)`]
+              : []),
+          ].join('\n'),
+        },
+        ...shown.map((candidate) => {
+          const label = candidateLabel(candidate);
+          return {
+            tag: 'button',
+            type: 'primary',
+            width: 'fill',
+            text: { tag: 'plain_text', content: safe(label, 60) },
+            value: {
+              cmd: 'session-alias',
+              action: 'use-pick',
+              sessionId: candidate.sessionId,
+              label,
+              scope: input.scope,
+              workspaceCwd: input.workspaceCwd,
+              actorId: input.actorId,
+            },
+          };
+        }),
+        {
+          tag: 'button',
+          type: 'default',
+          width: 'fill',
+          text: { tag: 'plain_text', content: zh ? '取消' : 'Cancel' },
+          value: {
+            cmd: 'session-alias',
+            action: 'use-cancel',
+            scope: input.scope,
+            workspaceCwd: input.workspaceCwd,
+            actorId: input.actorId,
+          },
+        },
+      ],
+    };
+  };
+  return localizedCard({
+    zhCn: { summary: '选择 DSH 会话', body: body('zh_cn') },
+    enUs: { summary: 'Choose a DSH session', body: body('en_us') },
+  });
+}
+
+/**
+ * One candidate's row label.
+ *
+ * The alias alone does not say which conversation it is, and the title alone
+ * cannot be typed elsewhere, so the row carries both. An unaliased session has
+ * no short handle to lead with, so its title leads instead.
+ */
+function candidateLabel(candidate: { sessionId: string; alias?: string; title?: string }): string {
+  const title = candidate.title?.trim();
+  if (candidate.alias !== undefined) {
+    return title === undefined || title === '' ? candidate.alias : `${candidate.alias} · ${title}`;
+  }
+  return title === undefined || title === '' ? candidate.sessionId : title;
+}
+
+/**
  * What a confirmation card becomes once its button has been pressed.
  *
  * A card whose buttons are still there after the operation ran reads as

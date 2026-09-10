@@ -113,6 +113,50 @@ describe('HostSessionProjectionSource', () => {
     expect(list[0]?.trashed).toBeUndefined();
   });
 
+  it('drops subagent sessions, which the listing route cannot mark', async () => {
+    // The route carries titles and workspace paths but no delegation metadata,
+    // so a subagent session used to be listed and to mint an alias nobody can
+    // use (`0910-3`, `0910-4`). The persisted header is the only signal, and
+    // each of its three markers is enough on its own.
+    stubFetch((url) => url.includes('/trash/list')
+      ? { body: { items: [] } }
+      : { body: { items: [
+          { sessionId: 's-parent', workspacePath: '/repo', title: 'parent work', createdAt: 300 },
+          { sessionId: 's-origin', workspacePath: '/repo', title: 'child by origin', createdAt: 200 },
+          { sessionId: 's-parent-link', workspacePath: '/repo', title: 'child by link', createdAt: 100 },
+          { sessionId: 's-depth', workspacePath: '/repo', title: 'child by depth', createdAt: 50 },
+        ] } });
+    const { services } = fakeServices({
+      headers: [
+        { id: 's-parent', delegationDepth: 0 },
+        { id: 's-origin', origin: 'subagent', delegationDepth: 1, parentSession: 's-parent' },
+        { id: 's-parent-link', parentSession: 's-parent' },
+        { id: 's-depth', delegationDepth: 1 },
+      ],
+    });
+
+    const list = await new HostSessionProjectionSource(services, endpoints).listSessions();
+
+    expect(list.map((session) => session.sessionId)).toEqual(['s-parent']);
+  });
+
+  it('keeps every session when the delegation headers are unavailable', async () => {
+    // An unreadable header list is reported as empty, which filters nothing:
+    // losing the delegation signal costs one stray entry, dropping the whole
+    // list over it would cost the session commands.
+    stubFetch((url) => url.includes('/trash/list')
+      ? { body: { items: [] } }
+      : { body: { items: [
+          { sessionId: 's1', workspacePath: '/repo', title: 'top level', createdAt: 2 },
+          { sessionId: 's2', workspacePath: '/repo', title: 'child', createdAt: 1 },
+        ] } });
+    const { services } = fakeServices();
+
+    const list = await new HostSessionProjectionSource(services, endpoints).listSessions();
+
+    expect(list.map((session) => session.sessionId)).toEqual(['s1', 's2']);
+  });
+
   it('pages history from the durable log', async () => {
     stubFetch(() => ({ body: { items: [] } }));
     const { services } = fakeServices({

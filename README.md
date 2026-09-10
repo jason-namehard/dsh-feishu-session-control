@@ -3,185 +3,122 @@
 <p align="center">🌏 <a href="README_EN.md">English</a> · 📦 <a href="docs/PROJECT_IDENTITY.md">项目身份与来源说明</a></p>
 
 <p align="center">
-  <strong>把 DeepSeek Harness 装进飞书</strong> · 扫码 30 秒 · 手机指挥本机 coding agent · 崩溃了飞书也照样回你
+  <strong>让每个飞书聊天连接一个可控的 DSH session</strong><br>
+  Web 会话默认独立 · 飞书会话按需连接 · 半衔接/完整衔接可切换
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Feishu%20%2F%20Lark-3370FF" alt="Platform">
-  <img src="https://img.shields.io/badge/agent-DeepSeek%20Harness-4D6BFE" alt="Agent">
-  <img src="https://img.shields.io/badge/runtime-Node.js%20%E2%89%A5%2022-339933" alt="Node">
-  <img src="https://img.shields.io/badge/License-AGPLv3-blue" alt="License">
-  <img src="https://img.shields.io/badge/status-released-blue" alt="Status">
-</p>
-
-> **来源声明**：本项目是 [`PlutoKeating/dsh-lark-bot`](https://github.com/PlutoKeating/dsh-lark-bot)（AGPL-3.0）的 **fork**，
-> 飞书长连接、命令路由、审批与工作区骨架来自上游，其著作权与 AGPL-3.0 义务继续适用。
+> **来源声明**：本项目是 [`PlutoKeating/dsh-lark-bot`](https://github.com/PlutoKeating/dsh-lark-bot)
+>（AGPL-3.0）的 **fork**。飞书长连接、命令路由、审批与工作区骨架来自上游，其著作权及
+> AGPL-3.0 义务继续适用。
 >
-> 本仓库在其上新增（由 **见川** 维护）：
-> - **进程内直连 DSH 主机**，取代原先的回环 HTTP 传输 —— 一并消除了浏览器认证、RPC 改名和事件 mux 端点这三层兼容面
-> - **DSH 0.1.2-rc.1 破坏性变更适配**（见 `docs/UPGRADE.md`）
-> - **`MMDD-N` 别名会话生命周期**：`/sessions` `/use` `/rename` `/delete` `/purge`，跨工作空间，回收站后再永久删除
-> - **按群 @ 策略** `/mention`，在「全群不用 @」的默认之上支持逐群例外
-> - 将 `dsh-sessions-manager`（MIT）**并入本包**，使用者不必再额外安装多个会话插件
->
-> 完整来源与许可说明见 [`NOTICE.md`](NOTICE.md) 与 [`docs/PROJECT_IDENTITY.md`](docs/PROJECT_IDENTITY.md)。
+> 本仓库由 **见川** 维护，新增了 DSH `0.1.2-rc.1` 进程内适配、跨工作空间会话别名、回收站与
+> 永久删除、Web 会话管理面板、飞书会话半/完整衔接，以及“只镜像 DSH 原生审批”的统一审批链。
+> 完整说明见 [`NOTICE.md`](NOTICE.md) 和 [`docs/PROJECT_IDENTITY.md`](docs/PROJECT_IDENTITY.md)。
 
-## 项目简介
+## 项目定位
 
-本项目正式名称为 **DSH飞书Session控制**；npm/DSH 兼容包名暂保留为 `dsh-lark-bot`，以避免破坏现有 profile。
+本项目把飞书/Lark 桥接、DSH session 远程控制和 Web 会话管理整合进一个包。npm/DSH 包名暂时保留
+为 `dsh-lark-bot`，项目与仓库名称为 **DSH飞书Session控制 / dsh-feishu-session-control**。
 
-让 DeepSeek Harness 成为你飞书里的一员，在手机、群聊、话题里直接指挥本机 coding agent。
-走飞书 WebSocket 长连接，**不需要公网 IP、域名、服务器或内网穿透**；Linux / macOS / Windows 通用，Node.js ≥ 22。
+- 通过飞书 WebSocket 长连接收发消息，不需要公网 IP、域名或内网穿透。
+- 作为 DSH 插件在宿主进程中运行；支持 DSH `0.1.2-rc.1`。
+- 不包含 Guardian，不接管已关闭的 DSH，也不会自动启动或自动重启 DSH。
+- Web 创建的 session 默认与飞书无关；只有飞书主动创建或显式 `/use` 的 session 才建立连接。
 
----
+## 会话行为
+
+| 操作 | 结果 |
+| --- | --- |
+| Web 创建 session | 默认不连接飞书；Web 消息和审批留在 Web 内 |
+| 飞书聊天首次发送普通消息 | 自动创建独立 DSH session，并以**半衔接**连接 |
+| `/use 0909-1` | 当前聊天切换到目标 session，不回填历史，切换后为半衔接 |
+| `/switch` | 用卡片选择半衔接或完整衔接 |
+| `/detach` | 只解除飞书连接；DSH session 和 Web 数据继续保留 |
+| 关闭 DSH | 飞书同步断开；插件不接管、不拉起 DSH |
+
+**半衔接**：飞书发起的回合仍在电脑端完整显示，其最终结果返回飞书；之后若从 Web/TUI 单独发起新
+回合，该回合的消息与回复不抄送飞书。
+
+**完整衔接**：除飞书发起回合外，同一 session 中从 Web/TUI 发起的新消息和回复也抄送到当前飞书聊天。
 
 ## 快速开始
 
-**前置**：本机已安装 DeepSeek Harness（`dsh`）并配置好 `DEEPSEEK_API_KEY`；Node.js ≥ 22.19；一个飞书 / Lark 账号。
+前置条件：Node.js ≥ 22、已安装 DeepSeek Harness、已配置模型与 API key，并准备一个飞书/Lark 自建应用。
 
 ```bash
-npx dsh-lark-bot@latest setup --profile dsh-lark   # ① 一键安装 dsh-lark + web + Guardian
-dsh web                                             # ② 在同一个前台进程启动 DSH Web + 飞书桥接
+git clone https://github.com/jason-namehard/dsh-feishu-session-control.git
+cd dsh-feishu-session-control
+corepack enable
+pnpm install
+pnpm build
+node bin/dsh-lark-bot.mjs setup --profile dsh-lark --package file:/你的绝对路径/dsh-feishu-session-control
+dsh --profile web
 ```
 
-首次启动终端打印二维码 → 飞书 App 扫码创建或选择 PersonalAgent 应用 → 绑定后直接私聊发消息；群聊 / 话题默认 `@bot`。
-不要同时启动 `dsh --profile dsh-lark`，否则会建立第二条飞书长连接。
+Windows 示例中的本地包参数可写为
+`file:E:/Vibecoding-Mirasim/dsh-feishu-session-control`。`setup` 会把同一个整合包安装到桥接 profile 和
+`web` profile。首次绑定可按终端二维码完成；已有应用也可通过 `DSH_LARK_APP_ID`、
+`DSH_LARK_APP_SECRET` 和 `DSH_LARK_TENANT` 配置。
 
-- **已有应用**可跳过扫码：`DSH_LARK_APP_ID=cli_xxx DSH_LARK_APP_SECRET=<secret> DSH_LARK_TENANT=feishu dsh web`。
-- **升级**：`npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes`。
+> 当前 fork 尚未以独立 npm 包发布。不要运行 `npx dsh-lark-bot@latest`，该名称指向上游项目。
 
-> **不用碰命令行**：管理员直接在飞书发 `/upgrade` 即可。
+更完整步骤见 [`docs/QUICK_START.md`](docs/QUICK_START.md)。
 
----
+## 常用命令
 
-## 核心能力
-
-**全网独家**
-
-- **安全网守护**：dsh 崩溃后飞书仍会回复你，`/safemode` 进入仅核心安全模式直接自愈；重启后自动恢复排队任务，`/jobs` 可显式重试。多数桥接方案是「串行单聊 + 崩溃就失联」。
-- **多机器人可信交接**：`bot add` 增加独立实例，可信机器人在同群真实 @ 交接，连续协作有上限。
-- **统一的工作区与会话管理**：每会话自动创建隔离 git worktree 项目工作区；`/sessions`、`/use`、`/rename`、`/delete`、`/purge` 通过稳定别名跨工作空间管理 DSH 会话；Web 端同时提供归档、恢复、回收站、永久清理、详情和跨工作区移动，不再要求额外安装多个会话插件。
-- **完善的版本管理机制**：管理员直接在飞书发 `/upgrade` 后台更新、验证并重载；有新版本才提醒，不打断当前工作。
-- **dsh Web 可视化设置**：官方 Settings → Plugins 页面点选工作目录、模型、并行数、提醒，不用背环境变量。
-
-**其他核心能力**
-
-- **并行多任务**：同一群聊同时跑多个任务、会话隔离。
-- **多角色 Agent**：`/role` 切换或指派 PM / 开发 / 文档等角色，各带人设、模型偏好与规则。
-- **对话内管理模型与密钥**：一张 `/config` 卡片切换供应商、热更新密钥，不用离开飞书。
-- **快速 / 平衡 / 深度模式**：`/mode` 一键选任务强度，下一轮生效且不打断当前任务。
-- **关键任务先拍板**：`lark_request_plan_approval` 先出完整计划，再批准或附意见继续规划。
-- **跨会话通知 + @人**：A 群跑完任务主动推送到 B 群 / 私聊并 @ 你。
-- **通知转发到常用 IM（纯通知）**：把完成 / 失败 / 审批与突发 / 故障通知，经 `/channels` 配置后单向推送到 Telegram / 企业微信群机器人等；只推送、无入站交互，飞书仍是唯一完整交互平台，未配置时行为不变。**`/channels add --qr <wechat|qq|telegram>` 让用户在飞书会话里收到二维码图片，用对应 IM 扫码即创建并绑定通知渠道。**
-
-> 流式过程卡以飞书原生折叠面板实时展示阶段、耗时与工具状态。
-
-## 命令速览
-
-命令帮助、状态与卡片均中英文；`/help` 为全量权威清单，全部命令见 [`docs/MANUAL.md`](docs/MANUAL.md)。
-
-| 命令 | 作用 |
+| 命令 | 功能 |
 | --- | --- |
-| `/config` | 模型 / Provider / 凭据管理卡片（`/model`、`/provider(s)`、`/key` 为同一张卡的别名） |
-| `/new [名称]` `/reset` | 开始新会话；不带名称会弹出命名卡片（留空即用 DSH 默认命名） |
-| `/sessions` | 列出 DSH 会话及稳定别名（`MMDD-N`），并标出当前对话所在会话 |
-| `/use <alias>` | 通过别名切换 DSH 会话（需确认，不回填历史） |
-| `/rename <alias> [名称]` | 给会话命名，Web 端同步显示；不带名称会弹出命名卡片 |
-| `/mention on\|off\|default [chatId]` | 本群（或指定群）是否必须 @ 机器人才回复（管理员） |
-| `/delete <alias>` | 通过别名将 DSH 会话移入回收站（需二次确认） |
-| `/purge <alias>` | 通过别名永久清理 DSH 会话（需二次确认） |
-| `/status` | 查看状态卡（工作区 / 模型 / session / run / token / 任务账本） |
-| `/mode`（`/effort`） | 选择快速 / 平衡 / 深度任务强度 |
-| `/cd <path>` | 切到该目录的独立会话 |
-| `/ws list\|save\|use\|remove` | 管理命名工作空间 |
-| `/jobs [list\|show\|retry]` | 对账并重试排队/运行/失败/中断任务 |
-| `/role list\|show\|set\|clear` | 查看 / 绑定角色 |
-| `/notify <scope\|chatId> <text>` | 跨会话发送通知（管理员） |
-| `/notifications [show\|off\|on …]` | 配置完成 / 失败 / 审批提醒（`sinks=` 转发到其他 IM 渠道） |
-| `/channels [list\|show\|add\|accept\|remove\|enable\|disable …]` | 管理出站通知渠道（管理员）；`add --qr <wechat\|qq\|telegram>` 扫码即建 |
-| `/stop` | 终止当前任务 |
-| `/upgrade` | 自更新（管理员） |
-| `/doctor` | 生成脱敏诊断包（管理员） |
-| `/help` | 查看命令清单 |
+| `/sessions` | 跨工作空间列出会话、`MMDD-N` 别名、名称、状态和“当前对话”标记 |
+| `/new [名称]` | 新建 session；未提供名称时打开可空提交的命名卡 |
+| `/use <别名>` | 连接已有 session，不回填历史 |
+| `/switch` | 切换半衔接/完整衔接 |
+| `/detach` | 解除当前飞书聊天与 session 的连接 |
+| `/rename <别名> [名称]` | 重命名 session，并同步到 DSH Web UI |
+| `/delete <别名>` | 二次确认后移入回收站；别名不重排 |
+| `/purge <别名>` | 二次确认后永久删除；不可恢复 |
+| `/mention on\|off\|default [chatId]` | 设置本群或指定群是否必须 `@` 机器人才响应 |
+| `/status` | 查看当前 scope、session、连接与任务状态 |
+| `/upgrade` | 管理员确认后在当前 DSH 进程内执行更新 |
 
----
+完整命令由 `/help` 返回；会话细节见 [`docs/SESSION_MANAGEMENT.md`](docs/SESSION_MANAGEMENT.md)。
 
-> **来源说明**：本项目由 **见川** 维护，是基于 `PlutoKeating/dsh-lark-bot`、DeepSeek Harness
-> 及 `dsh-sessions-manager` 等开源组件进行整合和重构的新项目，不代表上游作者，也不是上游仓库的 PR。
-> 发布地址以本项目后续配置的新 GitHub 仓库为准；本项目从不提供 `.exe` 或“下载即运行”的安装包。
+## 审批原则
 
-## 常见问题
+插件**不再增加逐工具审批或自定义权限门**。只有 DSH 本身决定需要批准时，插件才把同一个审批请求
+同步到飞书：
 
-**Q: DeepSeek Harness 怎么接入飞书？**
-**A:** 装好 Node ≥ 22 与 dsh（已配 `DEEPSEEK_API_KEY`）后，执行 `npx dsh-lark-bot@latest setup --profile dsh-lark`，再 `dsh web` 扫码绑定即可；私聊直接发消息，群聊 / 话题默认 `@bot`。
+- Web 与飞书看到的是同一请求；
+- 任一端批准即可继续（OR 关系）；
+- 飞书未连接的 Web session 不会被强制推送到飞书；
+- 危险操作和真实方案选择仍由 DSH 原生策略决定是否询问。
 
-**Q: 需要公网 IP、域名或服务器吗？**
-**A:** 不需要。飞书走 WebSocket 长连接（出站），本机在 NAT 后面也能用，免公网服务器、免域名、免内网穿透。
+这意味着 `pwsh`、`write` 等工具不会因为“来自飞书”而额外多一层批准。
 
-**Q: 和别的 DeepSeek Harness 飞书插件有什么区别？**
-**A:** 功能组合最全——安全网守护、并行多任务、多角色 Agent、多机器人交接、持久任务对账、会话归档、跨会话通知、dsh Web 可视化设置、对话内模型 / 密钥管理、执行模式、计划门禁、飞书内自更新。标准 dsh profile bundle，`setup` 是唯一安装路径。
+## 群聊
 
-**Q: 会不会有假冒版本？**
-**A:** GitHub 地址确认并发布后，只从本项目仓库和 npm 包获取；本项目从不提供 `.exe` 或“下载即运行”安装包，任何分发 exe 的都是假冒来源。
+一个普通群聊默认对应一套共享 session。首次消息自动创建，之后只处理新事件，不会轮询并重复注入全部
+群历史。若要不 `@` 也响应，需要在飞书开放平台给应用身份开启敏感权限
+`im:message.group_msg`，并用 `/mention off` 配置该群；少数群可用 `/mention on` 恢复为必须 `@`。
 
----
+## Web 会话管理
 
-## 兼容性
+整合面板提供归档、恢复、回收站、永久删除、详情、收藏和跨工作空间移动。Web 只在回收站内显示“彻底
+删除”；飞书保留 `/purge <别名>`，并始终要求二次确认。
 
-- **DeepSeek Harness（`dsh`）**：已验证 **0.1.0-rc.8**（2026-08-25），经官方 `@deepseek-ai/dsh-sdk-client` / `dsh-acp` 接入；锁定版本与升级政策见 [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)。
-- **运行时**：Node.js ≥ 22.19；**平台**：Linux / macOS / Windows。adapter 默认 `web`（复用本机 DSH Web 的 session），可切 `sdk` / `acp` / `headless`。
-
-## 配置说明
-
-- **推荐**：本机 dsh Web → **Settings → Plugins → dsh-lark-bot**，直接查看 / 修改服务区域、App ID、App Secret、工作目录、默认模型、并行数、adapter 与提醒；App Secret 只写不回显。
-- 也可用 `/config`、`/providers`、`/provider`、`/key` 在飞书内核验供应商 / 模型 / 凭据并写操作（仅管理员）。
-- 环境变量统一 `DSH_LARK_*` 前缀，状态根目录为 `~/.dsh-lark`，模板见 [`.env.example`](.env.example)；完整环境变量矩阵见 [`docs/MANUAL.md`](docs/MANUAL.md) §9。
-
-> 行为细节（崩溃对账、会话隔离、计划门禁、逐操作审批、多机器人交接、安全网守护等）见 [`docs/FEATURES.md`](docs/FEATURES.md)；
-> 权限与数据见 [`docs/MANUAL.md`](docs/MANUAL.md) §6 与 [`SECURITY.md`](SECURITY.md)。
-
-## 安全与许可
-
-- **许可证**：GNU AGPL-3.0（见 [`LICENSE`](LICENSE)）。开源可自托管，个人 / 内部使用免费；**商用 / SaaS / 闭源二开需另行授权**。
-- **安全**：默认拒绝、密钥脱敏、路径 containment、SSRF 防护、过期事件拒绝、交互工具默认禁用——见 [`SECURITY.md`](SECURITY.md)；安全漏洞请走 GitHub Security Advisory 私下报告。
-
-## 升级与卸载
+## 开发与验证
 
 ```bash
-npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes   # 升级（或飞书内管理员 /upgrade）
+pnpm install
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
-- **禁用**：启动 profile 前导出 `DSH_LARK_DISABLED=1`（插件保留但停止桥接引擎）。
-- **卸载**：`dsh plugin --profile dsh-lark remove dsh-lark-bot`；本地状态（配置 / 会话 / 归档 / 角色）留在 `~/.dsh-lark`。
+Windows 未开启“开发人员模式”时，少数依赖目录符号链接的测试会因 `EPERM` 失败；POSIX `0600` 权限位
+断言在 Windows 也不适用。核心 session、审批与进程内升级测试不依赖这些平台能力。
 
----
+## 许可
 
-## 关于项目
-
-- **开发**：`pnpm install && pnpm typecheck && pnpm test && pnpm build`；生态交付标准见 [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md)，AI Agent 工作流见 [`AGENTS.md`](AGENTS.md)。双包发布 `pnpm publish:dual`（`dsh-lark-bot` + `dsh-feishu-bot`，共享 dist）。
-- **维护者**：**见川**。
-- **来源与许可证**：上游及第三方来源、许可证和保留声明见 [`NOTICE.md`](NOTICE.md) 与 [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES)。
-- **协作者**：[zhuguangjun2002](https://github.com/zhuguangjun2002) · [chensimo1992-sys](https://github.com/chensimo1992-sys) · [estelledc](https://github.com/estelledc) · [fredjiangyysx](https://github.com/fredjiangyysx) · [Geoffrey-hougaojie](https://github.com/Geoffrey-hougaojie) · [hellxiaoao](https://github.com/hellxiaoao) · [koprivnikarurnaa-oss](https://github.com/koprivnikarurnaa-oss) · [Normanyin](https://github.com/Normanyin) · [pancong0711](https://github.com/pancong0711) · [qvivp](https://github.com/qvivp)。
-- **文档**：`QUICK_START`（安装/快速开始）· `MANUAL`（完整手册+命令+环境变量）· `FEATURES`（能力行为细节）· `COMPATIBILITY`· `ARCHITECTURE`· `API`· `roadmap`。
-
-## 相关生态
-
-| 平台 | 状态 |
-| :--- | :--- |
-| [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) | ✅ 已收录（[#1408](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/1408)） |
-| [awesome-dsh-plugins](https://github.com/AdamPlatin123/awesome-dsh-plugins) | ✅ 已收录 · 运行级可用 |
-| dshfind / dshbase / dsh-plugin.org | 上游项目历史收录，当前项目发布后重新登记 |
-| [omdsh-dev/community](https://github.com/orgs/omdsh-dev/discussions/11) | ✅ 收录申请通过 · 讨论活跃 |
-
-## 安全提醒
-
-> 2026-08-17 发现假冒仓库 **`tarraencompassing61/dsh-lark-bot`**：非 fork 重新上传、114 个 commit 中
-> 113 个作者为 PlutoKeating、删除全部 CI、关闭 Issues、Releases 为 0，却以“下载 Windows exe 双击运行”的
-> README 冒充官方分发。**本项目从不提供 exe，任何此类下载均为假冒 / 恶意来源。**
->
-> 取证存档：[`docs/security/2026-08-17-impostor-repo-evidence/`](docs/security/2026-08-17-impostor-repo-evidence/README.md) ·
-> 上游历史下载与取证说明：[`docs/DOWNLOAD.md`](docs/DOWNLOAD.md) · 持续监控：`pnpm security:monitor`
-
-## 免责声明
-
-> 本项目为非官方社区工具，与 DeepSeek、字节跳动 / 飞书（Lark）无关联，亦未获得其背书。DeepSeek Harness、Feishu / Lark 及相关商标归各自权利人所有。
+- 主许可证：[`LICENSE`](LICENSE)（GNU AGPL-3.0）
+- 上游与第三方说明：[`NOTICE.md`](NOTICE.md)
+- `dsh-sessions-manager` MIT 许可：[`THIRD_PARTY_LICENSES/dsh-sessions-manager-MIT.txt`](THIRD_PARTY_LICENSES/dsh-sessions-manager-MIT.txt)

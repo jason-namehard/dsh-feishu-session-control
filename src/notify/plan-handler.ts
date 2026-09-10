@@ -6,6 +6,7 @@ import { log } from '../core/logger.js';
 import type { SessionStore } from '../session/store.js';
 import { bilingualMarkdown } from '../card/i18n.js';
 import { redactEmails, redactSecrets } from '../config/security.js';
+import type { CanRouteSessionToFeishu } from './can-route.js';
 
 export interface PlanPayload {
   token: string;
@@ -22,6 +23,7 @@ export interface PlanResult {
 
 export interface PlanHandlerDeps {
   sessions: SessionStore;
+  canRouteSessionToFeishu?: CanRouteSessionToFeishu;
   scopeDirectory: ScopeDirectory;
   plans: PlanApprovalRegistry;
   channel: {
@@ -36,6 +38,10 @@ export function buildPlanHandler(
   deps: PlanHandlerDeps,
 ): (payload: PlanPayload, signal?: AbortSignal) => Promise<PlanResult> {
   return async (payload, signal) => {
+    const canRoute = deps.canRouteSessionToFeishu;
+    if (canRoute !== undefined && (await canRoute(payload.sessionId)) === false) {
+      return { ok: false, error: `session is not currently connected to Feishu: ${payload.sessionId}` };
+    }
     const scope = deps.sessions.scopeForSession(payload.sessionId);
     if (!scope) return { ok: false, error: `unknown session: ${payload.sessionId}` };
     const destination = deps.scopeDirectory.resolve(scope);

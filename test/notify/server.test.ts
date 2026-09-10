@@ -114,7 +114,7 @@ describe('NotifyServer', () => {
     const tool = registered as { execute(args: unknown, exec: unknown): Promise<unknown> };
     const result = await tool.execute(
       { text: 'report ready', scope: 'chat-a', mention_user_ids: ['ou_user1'] },
-      {} as never,
+      { agent: { session: { id: 'session-1' } } } as never,
     );
     expect(result).toEqual({ ok: true, chatId: 'oc_group' });
     expect(send).toHaveBeenCalledWith(
@@ -371,9 +371,9 @@ describe('NotifyServer', () => {
 
   it('serves authenticated one-shot approval outcomes', async () => {
     const denial = {
-      layer: 'permission-policy' as const,
-      reason: 'scope policy is deny',
-      toChange: 'run /permission ask',
+      layer: 'dsh-native-approval' as const,
+      reason: 'DSH rejected this tool request',
+      toChange: 'approve it in DSH Web or Feishu',
     };
     const approval = vi.fn().mockResolvedValue({ ok: true, outcome: 'rejected', denial });
     const server = new NotifyServer({
@@ -397,67 +397,26 @@ describe('NotifyServer', () => {
     );
   });
 
-  it('returns ask and allow policy-only checks without requiring an approval outcome', async () => {
-    const approval = vi.fn()
-      .mockResolvedValueOnce({ ok: true, policy: 'ask' })
-      .mockResolvedValueOnce({ ok: true, policy: 'allow' });
+  it('does not give legacy policyCheckOnly callbacks a separate permission path', async () => {
+    const approval = vi.fn().mockResolvedValue({ ok: true, outcome: 'allowed-once' });
     const server = new NotifyServer({
       token: 'test-token', resolve: () => undefined, send: vi.fn(), approval,
     });
     servers.push(server);
     await server.start();
-
-    for (const policy of ['ask', 'allow'] as const) {
-      const response = await fetch(server.approvalUrl!, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          token: 'test-token', sessionId: 'session-1', toolName: 'skill',
-          policyCheckOnly: true,
-        }),
-      });
-
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({ ok: true, policy });
-    }
-    expect(approval).toHaveBeenCalledTimes(2);
-    expect(approval).toHaveBeenLastCalledWith(expect.objectContaining({ policyCheckOnly: true }));
-  });
-
-  it('preserves deny metadata and rejects malformed policy-only handler responses', async () => {
-    const denial = {
-      layer: 'permission-policy' as const,
-      reason: 'scope policy is deny',
-      toChange: 'run /permission ask',
-    };
-    const approval = vi.fn()
-      .mockResolvedValueOnce({ ok: true, policy: 'deny', denial })
-      .mockResolvedValueOnce({ ok: true, outcome: 'allowed-once' });
-    const server = new NotifyServer({
-      token: 'test-token', resolve: () => undefined, send: vi.fn(), approval,
+    const response = await fetch(server.approvalUrl!, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: 'test-token', sessionId: 'session-1', toolName: 'skill', policyCheckOnly: true,
+      }),
     });
-    servers.push(server);
-    await server.start();
-    const payload = {
-      token: 'test-token', sessionId: 'session-1', toolName: 'bash', policyCheckOnly: true,
-    };
-
-    const denied = await fetch(server.approvalUrl!, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    expect(denied.status).toBe(200);
-    await expect(denied.json()).resolves.toEqual({ ok: true, policy: 'deny', denial });
-
-    const malformed = await fetch(server.approvalUrl!, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    expect(malformed.status).toBe(404);
-    await expect(malformed.json()).resolves.toEqual({
-      ok: false,
-      error: 'invalid policy response',
-    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, outcome: 'allowed-once' });
+    expect(approval).toHaveBeenCalledWith(
+      expect.objectContaining({ policyCheckOnly: true }),
+      expect.any(AbortSignal),
+    );
   });
 
   it('rejects invalid approval callbacks before invoking the handler', async () => {

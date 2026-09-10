@@ -1,63 +1,61 @@
-# 下载说明 · Download Notes
+# 下载与安装说明
 
-> 本页保留上游 dsh-lark-bot 的历史下载与分发说明，用于来源追溯；当前项目正式名称为
-> **DSH飞书Session控制**，由 **见川**维护。新的 GitHub 发布地址确认后再更新本页渠道清单。
+最后核对日期：2026-09-09。
 
-## 上游历史渠道（待重新登记）
+## 当前正式来源
 
-| 渠道 | 地址 / 包名 |
+| 项目 | 地址 / 说明 |
 | :--- | :--- |
-| 官方 GitHub 仓库 | <https://github.com/PlutoKeating/dsh-lark-bot> |
-| 官方 npm 包（唯一） | `dsh-lark-bot`（同源双包 `dsh-feishu-bot`，维护者 `plutokeating`） |
-| 官方 Releases | <https://github.com/PlutoKeating/dsh-lark-bot/releases> |
-| GitHub Packages | `@plutokeating/dsh-lark-bot` / `@plutokeating/dsh-feishu-bot` |
+| 本项目 GitHub 仓库 | <https://github.com/jason-namehard/dsh-feishu-session-control> |
+| 上游来源 | <https://github.com/PlutoKeating/dsh-lark-bot>（AGPL-3.0 fork 基础） |
+| 当前交付方式 | Git 源码 + DSH 本地 `file:` 插件安装 |
+| npm 状态 | 尚未以本项目独立包名发布 |
 
-## 官方安装（没有“下载安装包”这回事）
+## 安装
 
-```bash
-# 唯一安装命令
-npx dsh-lark-bot@latest setup --profile dsh-lark
-
-# 一键升级
-npx dsh-lark-bot@latest upgrade --profile dsh-lark --yes
-
-# 或标准 dsh 插件方式
-dsh plugin --profile <name> add dsh-lark-bot
+```powershell
+git clone https://github.com/jason-namehard/dsh-feishu-session-control.git
+Set-Location dsh-feishu-session-control
+corepack enable
+pnpm install
+pnpm build
+$packagePath = 'file:' + ((Resolve-Path .).Path -replace '\\', '/')
+node bin/dsh-lark-bot.mjs setup --profile dsh-lark --package $packagePath
 ```
 
-本项目以 npm 包 + dsh 标准 profile bundle 交付，**从不提供 Windows/macOS 可执行文件（.exe 等）**。
+然后启动承载 Web UI 与飞书连接的 profile：
 
-## Release 资产说明
-
-每个 GitHub Release 发布两个 **npm tarball（源码包，不是可执行文件）**：
-
-- `dsh-lark-bot-<version>.tgz`
-- `dsh-feishu-bot-<version>.tgz`
-
-自本文档落地后的下一个 Release 起，每个资产随附同名 `<asset>.sha256` 校验文件。下载后请校验：
-
-```bash
-# Linux / macOS
-shasum -a 256 dsh-lark-bot-<version>.tgz
-
-# Windows PowerShell
-Get-FileHash dsh-lark-bot-<version>.tgz -Algorithm SHA256
+```powershell
+dsh --profile web
 ```
 
-与 Release 中 `<asset>.sha256` 内容比对，不一致即视为损坏或被篡改：请勿安装，并按 [`SECURITY.md`](SECURITY.md) 的报告渠道反馈。
+不要运行 `npx dsh-lark-bot@latest`。本项目为了兼容 DSH 暂时保留内部包名 `dsh-lark-bot`，但该 npm
+名称仍指向上游项目，不会安装本 fork。
 
-## 如何识别假冒来源（核对清单）
+## 更新
 
-- 声称提供“Windows 可执行文件 / 双击运行 / 安装向导” → **假冒**（本项目从不发布 exe）；
-- 仓库名或包名不在上方官方清单 → **假冒**；
-- Releases 页没有 npm tarball，却挂 exe / 安装包 → **假冒**；
-- 页面无法访问 Issues、或要求通过第三方链接下载 → **假冒**。
+```powershell
+git pull --ff-only
+pnpm install
+pnpm typecheck
+pnpm build
+$packagePath = 'file:' + ((Resolve-Path .).Path -replace '\\', '/')
+dsh plugin --profile web add $packagePath
+```
 
-> [!WARNING]
-> 2026-08-17 已发现假冒仓库 `tarraencompassing61/dsh-lark-bot`：非 fork 重新上传、删除全部 CI、关闭 Issues、Releases 为 0，却用“下载 Windows exe 双击运行”的诱导性 README 冒充官方分发。取证存档见 [`docs/security/2026-08-17-impostor-repo-evidence/`](security/2026-08-17-impostor-repo-evidence/README.md)。
+优先让 `dsh-hot-installer` 热加载；若日志明确提示需要重启，再从托盘选择“重启 DSH”。
 
-## 遇到假冒来源怎么办
+## 发布资产
 
-1. **不要下载、不要运行、不要提供任何凭据**；
-2. 截图 + 保存链接，按 [`SECURITY.md`](SECURITY.md) 的报告渠道反馈；
-3. 官方维护者已部署持续监控（`npm run security:monitor`）——假冒仓库一旦发布附件会被第一时间识别并按“分发恶意软件”处理。
+当前仓库没有独立 npm 发布，也不提供所谓“下载即运行”的第三方安装器。将来若发布 tarball 或其他资产，
+必须由本项目 GitHub Releases 提供并附 SHA-256 校验值；在此之前，以仓库源码为唯一正式交付物。
+
+## 安全核对
+
+- 仓库所有者应为 `jason-namehard`，项目名应为 `dsh-feishu-session-control`；
+- README 第一屏应明确说明它是 `PlutoKeating/dsh-lark-bot` 的 AGPL-3.0 fork；
+- 不要把飞书 App Secret、模型 API key、真实 `.env` 或 DSH 凭据提交到仓库；
+- 来源不明的 exe、安装向导、压缩包或要求上传凭据的页面均不可信。
+
+上游历史假冒事件的存档仅用于来源追溯，见
+[`docs/security/2026-08-17-impostor-repo-evidence/`](security/2026-08-17-impostor-repo-evidence/README.md)。

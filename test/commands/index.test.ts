@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { ActiveRuns } from '../../src/bot/active-runs.js';
 import { ApprovalRegistry } from '../../src/bot/approvals.js';
 import { PlanApprovalRegistry } from '../../src/bot/plan-approvals.js';
@@ -29,7 +29,6 @@ import type { SessionArchive } from '../../src/session/archive.js';
 import { WorkspaceStore } from '../../src/workspace/store.js';
 import { latestVersion } from '../../src/upgrade/update-check.js';
 import { JobLedger } from '../../src/bot/job-ledger.js';
-import type { PermissionPolicyStore } from '../../src/bot/permission-policy-store.js';
 import type { NotificationPreference, NotificationPreferenceStore } from '../../src/bot/notification-preference-store.js';
 import type { ReplyPolicy, ReplyPolicyStore } from '../../src/bot/reply-policy-store.js';
 import { ExecutionModeStore } from '../../src/bot/execution-mode-store.js';
@@ -43,6 +42,10 @@ vi.mock('../../src/upgrade/update-check.js', async (importOriginal) => {
     currentVersion: () => '0.13.1',
     latestVersion: vi.fn().mockResolvedValue('0.14.0'),
   };
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 class DshProviderManager extends RuntimeDshProviderManager {
@@ -265,46 +268,6 @@ describe('command router', () => {
     expect(notificationPreferences.set).toHaveBeenLastCalledWith('chat-a', undefined);
   });
 
-  it('shows permission policy and restricts policy changes to admins', async () => {
-    let policy = 'ask' as 'ask' | 'allow' | 'deny';
-    const permissionPolicies = {
-      get: () => policy,
-      set: vi.fn(async (_scope: string, next: typeof policy) => { policy = next; }),
-    } as unknown as PermissionPolicyStore;
-    const sendMarkdown = vi.fn().mockResolvedValue(undefined);
-    const regular = makeContext({ permissionPolicies, senderId: 'user', channel: { sendMarkdown }, accessManager: makeAccessManager() });
-    await tryHandleCommand('/permission allow', regular);
-    expect(permissionPolicies.set).not.toHaveBeenCalled();
-    expect(sendMarkdown).toHaveBeenLastCalledWith('chat-a', expect.stringContaining('仅管理员'), { replyTo: 'msg-1' });
-
-    const admin = makeContext({ permissionPolicies, senderId: 'admin', channel: { sendMarkdown }, accessManager: makeAccessManager({ admins: ['admin'] }) });
-    await tryHandleCommand('/permission deny', admin);
-    expect(permissionPolicies.set).toHaveBeenCalledWith('chat-a', 'deny');
-    await tryHandleCommand('/permission', admin);
-    expect(sendMarkdown).toHaveBeenLastCalledWith('chat-a', expect.stringContaining('deny'), { replyTo: 'msg-1' });
-
-    await tryHandleCommand('/permission allow chat-a:member:user', admin);
-    expect(permissionPolicies.set).toHaveBeenLastCalledWith('chat-a:member:user', 'allow');
-    await tryHandleCommand('/permission deny other-chat:member:user', admin);
-    expect(permissionPolicies.set).not.toHaveBeenCalledWith('other-chat:member:user', 'deny');
-    expect(sendMarkdown).toHaveBeenLastCalledWith('chat-a', expect.stringContaining('只能修改当前聊天'), { replyTo: 'msg-1' });
-  });
-
-  it('does not report a permission change as successful when persistence fails', async () => {
-    const sendMarkdown = vi.fn().mockResolvedValue(undefined);
-    const ctx = makeContext({
-      senderId: 'admin',
-      accessManager: makeAccessManager({ admins: ['admin'] }),
-      permissionPolicies: {
-        get: () => 'ask',
-        set: vi.fn().mockRejectedValue(new Error('disk full')),
-      } as unknown as PermissionPolicyStore,
-      channel: { sendMarkdown },
-    });
-    await expect(tryHandleCommand('/permission deny', ctx)).rejects.toThrow('disk full');
-    expect(sendMarkdown).not.toHaveBeenCalledWith('chat-a', expect.stringContaining('已将 scope'), expect.anything());
-  });
-
   it('sends /status as a refreshable card with current scope metrics', async () => {
     const sessions = new SessionStore(':memory:');
     sessions.set('chat-a', 'session-1', '/tmp/default');
@@ -469,7 +432,7 @@ describe('command router', () => {
     const handled = await tryHandleCommand('/cd /tmp', ctx);
 
     expect(handled).toBe(true);
-    expect(ctx.workspaces.cwdFor('chat-a')).toBe('/tmp');
+    expect(ctx.workspaces.cwdFor('chat-a')).toBe(resolve('/tmp'));
     expect(ctx.sessions.resumeFor('chat-a', '/tmp/default')).toBe('session-a');
     expect(ctx.sessions.historyFor('chat-a', '/tmp/default')).toHaveLength(2);
     expect(stop).toHaveBeenCalledOnce();
@@ -1038,6 +1001,7 @@ describe('command router', () => {
   });
 
   it('/upgrade lets an admin check and receive an owner-bound confirmation card', async () => {
+    vi.stubEnv('DSH_LARK_UPGRADE_CHECK', '1');
     const sendCard = vi.fn().mockResolvedValue('upgrade-card');
     const sendMarkdown = vi.fn().mockResolvedValue(undefined);
     const check = vi.fn().mockResolvedValue({
@@ -1060,7 +1024,7 @@ describe('command router', () => {
     expect(card).toContain('offer-1');
     expect(card).toContain('确认更新');
     expect(card).toContain('取消');
-    expect(card).toContain('正在执行的任务会被中断');
+    expect(card).toContain('托盘重启 DSH');
   });
 
   it('/jobs only lists and retries jobs in the current scope and workspace', async () => {

@@ -61,7 +61,7 @@ describe('dsh-lark-bot setup', () => {
     });
   });
 
-  it('pre-approves pnpm builds, installs the bundle and the guardian by default', async () => {
+  it('pre-approves pnpm builds and installs the bundle', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-setup-'));
     tempDirs.push(home);
     const pkg = JSON.parse(
@@ -82,31 +82,22 @@ describe('dsh-lark-bot setup', () => {
         return child as unknown as ReturnType<typeof spawn>;
       }) as never);
 
-      const installGuardianFn = vi.fn().mockResolvedValue({
-        ok: true,
-        messages: ['守护状态已写入 /tmp/guardian.json'],
-      });
       await runSetup({
         profile: 'demo',
         webProfile: false,
         dshHome: home,
         bin: '/fake/dsh/bin.js',
-        installGuardianFn,
       });
 
       const workspaceYaml = await readFile(join(home, 'profiles', 'demo', 'pnpm-workspace.yaml'), 'utf8');
       expect(workspaceYaml).toContain('allowBuilds:');
       expect(workspaceYaml).toContain('protobufjs: true');
-      expect(installGuardianFn).toHaveBeenCalledWith(
-        expect.objectContaining({ dshProfile: 'demo' }),
-      );
       expect(spawnMock).toHaveBeenCalledWith(
         'node',
         ['/fake/dsh/bin.js', 'plugin', '--profile', 'demo', 'add', `dsh-lark-bot@${pkg.version}`],
         { stdio: 'inherit', env: expect.objectContaining({ DSH_HOME: home }) },
       );
       expect(stdout.join('')).toContain('dsh --profile demo');
-      expect(stdout.join('')).toContain('安全网守护已默认安装');
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -136,7 +127,6 @@ describe('dsh-lark-bot setup', () => {
         dshHome: home,
         bin: '/fake/dsh/bin.js',
         packageSpec: '/tmp/dsh-lark-bot-0.9.1.tgz',
-        guardian: false,
       });
 
       expect(spawnMock).toHaveBeenCalledWith(
@@ -144,82 +134,6 @@ describe('dsh-lark-bot setup', () => {
         ['/fake/dsh/bin.js', 'plugin', '--profile', 'demo', 'add', '/tmp/dsh-lark-bot-0.9.1.tgz'],
         { stdio: 'inherit', env: expect.objectContaining({ DSH_HOME: home }) },
       );
-    } finally {
-      process.stdout.write = originalWrite;
-    }
-  });
-
-  it('installs the safety-net guardian when guardian is explicitly enabled', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'dsh-setup-guardian-'));
-    tempDirs.push(home);
-    const stdout: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = ((chunk: string) => {
-      stdout.push(String(chunk));
-      return true;
-    }) as typeof process.stdout.write;
-
-    try {
-      const spawnMock = vi.mocked(spawn);
-      spawnMock.mockImplementation((() => {
-        const child = new EventEmitter();
-        queueMicrotask(() => child.emit('exit', 0));
-        return child as unknown as ReturnType<typeof spawn>;
-      }) as never);
-
-      const installGuardianFn = vi.fn().mockResolvedValue({
-        ok: true,
-        messages: ['守护状态已写入 /tmp/guardian.json（dsh profile=demo）'],
-      });
-      await runSetup({
-        profile: 'demo',
-        webProfile: false,
-        dshHome: home,
-        bin: '/fake/dsh/bin.js',
-        guardian: true,
-        installGuardianFn,
-      });
-
-      expect(installGuardianFn).toHaveBeenCalledWith(
-        expect.objectContaining({ dshProfile: 'demo' }),
-      );
-      expect(stdout.join('')).toContain('守护状态已写入');
-    } finally {
-      process.stdout.write = originalWrite;
-    }
-  });
-
-  it('skips the safety-net guardian when guardian is explicitly disabled', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'dsh-setup-no-guardian-'));
-    tempDirs.push(home);
-    const stdout: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = ((chunk: string) => {
-      stdout.push(String(chunk));
-      return true;
-    }) as typeof process.stdout.write;
-
-    try {
-      const spawnMock = vi.mocked(spawn);
-      spawnMock.mockImplementation((() => {
-        const child = new EventEmitter();
-        queueMicrotask(() => child.emit('exit', 0));
-        return child as unknown as ReturnType<typeof spawn>;
-      }) as never);
-
-      const installGuardianFn = vi.fn();
-      await runSetup({
-        profile: 'demo',
-        webProfile: false,
-        dshHome: home,
-        bin: '/fake/dsh/bin.js',
-        guardian: false,
-        installGuardianFn,
-      });
-
-      expect(installGuardianFn).not.toHaveBeenCalled();
-      expect(stdout.join('')).toContain('--no-guardian');
-      expect(stdout.join('')).toContain('未安装安全网守护');
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -242,7 +156,6 @@ describe('dsh-lark-bot setup', () => {
         profile: 'demo',
         dshHome: home,
         bin: '/fake/dsh/bin.js',
-        guardian: false,
       });
 
       expect(spawnMock).toHaveBeenCalledTimes(2);

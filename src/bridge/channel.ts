@@ -47,7 +47,6 @@ import { ReconnectNotifier } from './reconnect-notifier.js';
 import type { BotHandoffGuard } from '../bot/handoff-guard.js';
 import type { DurableQueuedMessage, JobLedger } from '../bot/job-ledger.js';
 import type { DiagnosticFile, DiagnosticRequestSnapshot } from '../diagnostics/bundle.js';
-import type { PermissionPolicyStore } from '../bot/permission-policy-store.js';
 import type { NotificationPreference, NotificationPreferenceStore } from '../bot/notification-preference-store.js';
 import type { NotificationChannelStore, OutboundSinkRegistry } from '../notify/sinks/index.js';
 import type { ReplyPolicyStore } from '../bot/reply-policy-store.js';
@@ -98,7 +97,6 @@ export interface StartChannelDeps {
   questions?: QuestionRegistry;
   plans?: PlanApprovalRegistry;
   densityStore?: DensityStore;
-  permissionPolicies?: PermissionPolicyStore;
   notificationPreferences?: NotificationPreferenceStore;
   defaultNotificationPreference?: NotificationPreference;
   /** Configurable push-only outbound notification channels (issue #113). */
@@ -160,17 +158,19 @@ export interface StartChannelDeps {
   /**
    * Called when the persistent channel is unrecoverable (even a forced
    * reconnect failed). The engine should exit non-zero so the managed service /
-   * guardian restarts it. Optional so tests can omit it.
+   * the operator can restart it. Optional so tests can omit it.
    */
   onChannelUnrecoverable?: (error: unknown) => void;
   sessionProjectionStore?: SessionProjectionStore;
   sessionProjectionSource?: SessionProjectionSource;
   sessionProjectionLimits?: SessionProjectionLimits;
   sessionAliases?: SessionAliasManager;
+  onSessionProjectionReady?: (controller: SessionProjectionController | undefined) => void;
 }
 
 export interface BridgeChannel {
   channel: LarkChannel;
+  sessionProjection?: SessionProjectionController;
   disconnect(): Promise<void>;
   /** Live channel-readiness snapshot (issue #108). */
   channelHealth?: () => ChannelHealth;
@@ -212,7 +212,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     // longer delivering). `pingTimeout` force-reconnects when no inbound frame
     // arrives after the last ping; the app-level `keepalive` probes and
     // force-reconnects, and `onUnrecoverable` fires when even that fails so the
-    // engine can exit and let the managed service / guardian restart it.
+    // engine can exit and let a managed service restart it when configured.
     wsConfig: { pingTimeout: deps.channelPingTimeoutSec ?? DEFAULT_CHANNEL_PING_TIMEOUT_SEC },
     keepalive: {
       enabled: deps.channelKeepalive ?? true,
@@ -258,6 +258,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       })
     : undefined;
   sessionProjection?.rehydrateSessionMappings();
+  deps.onSessionProjectionReady?.(sessionProjection);
   const reconnectNotifier = new ReconnectNotifier(
     commandChannel,
     deps.scopeDirectory,
@@ -440,7 +441,6 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       questions: deps.questions,
       ...(deps.plans ? { plans: deps.plans } : {}),
       densityStore: deps.densityStore,
-      ...(deps.permissionPolicies ? { permissionPolicies: deps.permissionPolicies } : {}),
       ...(deps.notificationPreferences ? { notificationPreferences: deps.notificationPreferences } : {}),
       ...(deps.defaultNotificationPreference
         ? { defaultNotificationPreference: deps.defaultNotificationPreference }
@@ -687,7 +687,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
             threadId,
             outcome.kind === 'cancelled'
               ? bilingualMarkdown('已取消更新，未做任何更改。', 'Update cancelled. Nothing was changed.')
-              : bilingualMarkdown(`⬆️ 已开始更新到 \`${outcome.targetVersion}\`，Guardian 将完成更新并重载机器人。`, `⬆️ Updating to \`${outcome.targetVersion}\`. Guardian will finish the update and reload the bot.`),
+              : bilingualMarkdown(`⬆️ 已开始在当前 DSH 进程内更新到 \`${outcome.targetVersion}\`。完成后会提示从托盘重启。`, `⬆️ Updating to \`${outcome.targetVersion}\` inside the current DSH process. You will be prompted to restart from the tray when it finishes.`),
             scope,
             'channel-upgrade',
           );
@@ -759,7 +759,6 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
             approvals: deps.approvals,
             questions: deps.questions,
             ...(deps.plans ? { plans: deps.plans } : {}),
-            ...(deps.permissionPolicies ? { permissionPolicies: deps.permissionPolicies } : {}),
             ...(deps.notificationPreferences ? { notificationPreferences: deps.notificationPreferences } : {}),
             ...(deps.defaultNotificationPreference
               ? { defaultNotificationPreference: deps.defaultNotificationPreference }
@@ -955,7 +954,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       // received and then silently discarded, which is why those two cards
       // never did anything at all.
       if ((value?.cmd === 'session-projection' || value?.cmd === 'session-alias' ||
-           value?.cmd === 'session-rename') && sessionProjection) {
+           value?.cmd === 'session-rename' || value?.cmd === 'session-connection') && sessionProjection) {
         const outcome = await sessionProjection.handleAction({
           value,
           operatorId: event.operator?.openId,
@@ -1012,6 +1011,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   }
   return {
     channel,
+    ...(sessionProjection ? { sessionProjection } : {}),
     channelHealth: () => channelHealth.snapshot(),
     disconnect: async () => {
       await groupPoller?.stop();

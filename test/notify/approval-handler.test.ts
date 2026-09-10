@@ -3,141 +3,101 @@ import { ApprovalRegistry } from '../../src/bot/approvals.js';
 import { ScopeDirectory } from '../../src/bridge/scope-directory.js';
 import { buildApprovalHandler } from '../../src/notify/approval-handler.js';
 import { SessionStore } from '../../src/session/store.js';
-import type { PermissionPolicyStore } from '../../src/bot/permission-policy-store.js';
+
+function fixture() {
+  const sessions = new SessionStore(':memory:');
+  sessions.set('chat-a', 'session-1', '/tmp/project');
+  const directory = new ScopeDirectory(':memory:');
+  directory.register('chat-a', 'chat-a', undefined);
+  return { sessions, directory };
+}
 
 describe('buildApprovalHandler', () => {
-  it('applies allow and deny policies before creating an SDK/Web approval card', async () => {
-    const sessions = new SessionStore(':memory:');
-    sessions.set('chat-a', 'session-1', '/tmp/project');
-    const directory = new ScopeDirectory(':memory:');
-    directory.register('chat-a', 'chat-a', undefined);
-    const sendCard = vi.fn();
-    const sendMarkdown = vi.fn().mockResolvedValue(undefined);
-    const payload = { token: 't', sessionId: 'session-1', toolName: 'bash' };
-    const allow = buildApprovalHandler({
-      sessions, scopeDirectory: directory, approvals: new ApprovalRegistry(), channel: { sendCard },
-      permissionPolicies: { get: () => 'allow' } as unknown as PermissionPolicyStore,
+  it('ignores the retired bridge policy and asks for the native request', async () => {
+    const { sessions, directory } = fixture();
+    const approvals = new ApprovalRegistry();
+    const sendCard = vi.fn(async (_chatId: string, _card: object) => 'approval-card');
+    const handler = buildApprovalHandler({
+      sessions,
+      scopeDirectory: directory,
+      approvals,
+      channel: { sendCard },
     });
-    await expect(allow(payload)).resolves.toEqual({ ok: true, outcome: 'allowed-once' });
-    const deny = buildApprovalHandler({
-      sessions, scopeDirectory: directory, approvals: new ApprovalRegistry(), channel: { sendCard, sendMarkdown },
-      permissionPolicies: { get: () => 'deny' } as unknown as PermissionPolicyStore,
-    });
-    await expect(deny(payload)).resolves.toMatchObject({
-      ok: true,
-      outcome: 'rejected',
-      denial: { layer: 'permission-policy' },
-    });
-    expect(sendCard).not.toHaveBeenCalled();
-    expect(sendMarkdown).toHaveBeenCalledWith(
-      'chat-a',
-      expect.stringContaining('[policy-denial layer=permission-policy]'),
-      undefined,
-    );
+    const result = handler({ token: 't', sessionId: 'session-1', toolName: 'bash' });
+    await vi.waitFor(() => expect(sendCard).toHaveBeenCalledOnce());
+    const card = JSON.stringify(sendCard.mock.calls[0]?.[1]);
+    const id = card.match(/approval-[a-z0-9]+/u)?.[0];
+    expect(id).toBeTruthy();
+    approvals.resolve('chat-a', id!, 'allowed-once');
+    await expect(result).resolves.toEqual({ ok: true, owned: true, outcome: 'allowed-once' });
   });
 
-  it('answers policy preflight and silently allows low-risk calls under ask', async () => {
-    const sessions = new SessionStore(':memory:');
-    sessions.set('chat-a', 'session-1', '/tmp/project');
-    const directory = new ScopeDirectory(':memory:');
-    directory.register('chat-a', 'chat-a', undefined);
+  it('does not route a detached or half-connected Web-origin session', async () => {
+    const { sessions, directory } = fixture();
     const sendCard = vi.fn();
     const handler = buildApprovalHandler({
-      sessions, scopeDirectory: directory, approvals: new ApprovalRegistry(), channel: { sendCard },
-      permissionPolicies: { get: () => 'ask' } as unknown as PermissionPolicyStore,
+      sessions,
+      scopeDirectory: directory,
+      approvals: new ApprovalRegistry(),
+      canRouteSessionToFeishu: () => false,
+      channel: { sendCard },
     });
-
     await expect(handler({
-      token: 't', sessionId: 'session-1', toolName: 'bash', policyCheckOnly: true,
-    })).resolves.toEqual({ ok: true, policy: 'ask' });
-    await expect(handler({
-      token: 't', sessionId: 'session-1', toolName: 'bash', lowRisk: true,
-    })).resolves.toEqual({ ok: true, outcome: 'allowed-once' });
+      token: 't', sessionId: 'session-1', toolName: 'bash',
+    })).resolves.toEqual({
+      ok: false,
+      error: expect.stringContaining('not currently connected'),
+    });
+    // No card was delivered, so the answerer must read this as "desktop owns
+    // it" — the `owned` flag has to stay absent, never `false`.
+    const denied = await handler({ token: 't', sessionId: 'session-1', toolName: 'bash' });
+    expect('owned' in denied).toBe(false);
     expect(sendCard).not.toHaveBeenCalled();
   });
 
-  it('routes a default-runtime request to a detailed one-shot card', async () => {
-    const sessions = new SessionStore(':memory:');
-    sessions.set('chat-a:thread-a', 'session-1', '/tmp/project');
-    const directory = new ScopeDirectory(':memory:');
-    directory.register('chat-a:thread-a', 'chat-a', 'thread-a', 'topic', 'root-message');
+  it('reports a cancelled card as owned so it is never re-asked on the desktop', async () => {
+    const { sessions, directory } = fixture();
     const approvals = new ApprovalRegistry();
-    const sendCard = vi.fn(async (_chatId: string, _card: object, _options?: unknown) => 'approval-card');
-    const cancelReminder = vi.fn();
-    const onApprovalWaiting = vi.fn(() => cancelReminder);
-    const handler = buildApprovalHandler({ sessions, scopeDirectory: directory, approvals, onApprovalWaiting, channel: { sendCard } });
+    const sendCard = vi.fn(async (_chatId: string, _card: object) => 'approval-card');
+    const handler = buildApprovalHandler({
+      sessions,
+      scopeDirectory: directory,
+      approvals,
+      canRouteSessionToFeishu: () => true,
+      channel: { sendCard },
+    });
+    const controller = new AbortController();
+    const result = handler({ token: 't', sessionId: 'session-1', toolName: 'bash' }, controller.signal);
+    await vi.waitFor(() => expect(sendCard).toHaveBeenCalledOnce());
+    controller.abort();
 
+    await expect(result).resolves.toEqual({ ok: true, owned: true, outcome: 'cancelled' });
+  });
+
+  it('routes a connected request and returns the chosen decision', async () => {
+    const { sessions, directory } = fixture();
+    const approvals = new ApprovalRegistry();
+    const sendCard = vi.fn(async (_chatId: string, _card: object) => 'approval-card');
+    const handler = buildApprovalHandler({
+      sessions,
+      scopeDirectory: directory,
+      approvals,
+      canRouteSessionToFeishu: () => true,
+      channel: { sendCard },
+    });
     const result = handler({
-      token: 't', sessionId: 'session-1', toolName: 'bash', callId: 'call-1',
-      reason: 'Run the requested tests', toolInput: { command: 'pnpm test' },
+      token: 't', sessionId: 'session-1', toolName: 'bash',
+      reason: 'Run tests', toolInput: { command: 'pnpm test' },
     });
     await vi.waitFor(() => expect(sendCard).toHaveBeenCalledOnce());
-    expect(sendCard).toHaveBeenCalledWith(
-      'chat-a', expect.objectContaining({ schema: '2.0' }),
-      { threadId: 'thread-a', replyTo: 'root-message' },
-    );
-    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain('pnpm test');
-    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain('Allow once');
-    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain('Reject');
-    const id = /"cmd":"approve","id":"([^"]+)"/u.exec(
-      JSON.stringify(sendCard.mock.calls[0]?.[1]),
-    )?.[1];
-    expect(id).toBeTruthy();
-    approvals.resolve('chat-a:thread-a', id!, 'rejected');
+    const card = JSON.stringify(sendCard.mock.calls[0]?.[1]);
+    expect(card).toContain('pnpm test');
+    const id = card.match(/approval-[a-z0-9]+/u)?.[0];
+    approvals.resolve('chat-a', id!, 'rejected');
     await expect(result).resolves.toMatchObject({
       ok: true,
       outcome: 'rejected',
-      denial: { layer: 'tool-approval' },
+      denial: { layer: 'dsh-native-approval' },
     });
-    expect(onApprovalWaiting).toHaveBeenCalledWith('chat-a:thread-a', 'bash');
-    expect(cancelReminder).toHaveBeenCalledOnce();
-  });
-
-  it('cancels only its own approval when card delivery fails', async () => {
-    const sessions = new SessionStore(':memory:');
-    sessions.set('chat-a', 'session-a', '/tmp/project');
-    sessions.set('chat-a', 'session-b', '/tmp/project');
-    const directory = new ScopeDirectory(':memory:');
-    directory.register('chat-a', 'chat-a', undefined);
-    const approvals = new ApprovalRegistry();
-    const other = approvals.register('chat-a', {
-      id: 'other', sessionId: 'session-b', toolName: 'write', reason: undefined, options: [],
-    }, 'session-b');
-    const handler = buildApprovalHandler({
-      sessions, scopeDirectory: directory, approvals,
-      channel: { sendCard: vi.fn().mockRejectedValue(new Error('send failed')) },
-    });
-    await expect(handler({
-      token: 't', sessionId: 'session-a', toolName: 'bash', callId: 'failed', reason: 'test',
-    })).resolves.toEqual({ ok: false, error: 'send failed' });
-    expect(approvals.pendingCount('chat-a', 'session-b')).toBe(1);
-    approvals.resolve('chat-a', 'other', 'rejected');
-    await expect(other).resolves.toBe('rejected');
-  });
-
-  it('cancels, confirms and recalls an approval when the runtime disconnects', async () => {
-    const sessions = new SessionStore(':memory:');
-    sessions.set('chat-a', 'session-a', '/tmp/project');
-    const directory = new ScopeDirectory(':memory:');
-    directory.register('chat-a', 'chat-a', undefined);
-    const approvals = new ApprovalRegistry();
-    const sendMarkdown = vi.fn(async () => undefined);
-    const recallMessage = vi.fn(async () => undefined);
-    const handler = buildApprovalHandler({
-      sessions, scopeDirectory: directory, approvals,
-      channel: {
-        sendCard: vi.fn(async () => 'approval-card'), sendMarkdown, recallMessage,
-      },
-    });
-    const controller = new AbortController();
-    const result = handler({
-      token: 't', sessionId: 'session-a', toolName: 'bash', callId: 'call-a', reason: 'test',
-    }, controller.signal);
-    await vi.waitFor(() => expect(approvals.pendingCount('chat-a', 'session-a')).toBe(1));
-    controller.abort();
-    await expect(result).resolves.toEqual({ ok: false, error: 'approval cancelled' });
-    expect(approvals.pendingCount('chat-a', 'session-a')).toBe(0);
-    expect(sendMarkdown).toHaveBeenCalledWith('chat-a', expect.stringContaining('已取消'), undefined);
-    expect(recallMessage).toHaveBeenCalledWith('approval-card');
   });
 });

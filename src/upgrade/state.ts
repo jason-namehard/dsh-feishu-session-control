@@ -3,7 +3,7 @@
  *
  * The upgrade command records every run that changed the installation so a
  * later `--rollback` can deterministically reinstall the previous package
- * version (and re-apply the guardian). The file lives under the dsh-lark
+ * version. The file lives under the dsh-lark
  * state root, which is intentionally never touched by the upgrade itself —
  * config, sessions, archives and credentials survive upgrades and rollbacks.
  */
@@ -23,8 +23,6 @@ export interface UpgradeRecord {
   profile: string;
   /** `name@version` spec used for the upgrade (also the rollback reinstall uses the previous one). */
   packageSpec: string;
-  /** Whether the guardian service was (re)installed as part of the upgrade. */
-  guardianInstalled: boolean;
   /** True when the dsh profile process was running and was not restarted, so the new version is not active yet. */
   pendingRestart?: boolean;
 }

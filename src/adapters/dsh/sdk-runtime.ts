@@ -15,8 +15,6 @@ export const SDK_SERVER_PACKAGE = '@deepseek-ai/dsh-sdk-jsonrpc-server';
 export const SDK_SERVER_VERSION = DSH_COMPATIBILITY.sdkServer;
 export const SDK_BASE_BUNDLE = '@deepseek-ai/dsh-base';
 export const DEFAULT_SDK_PROFILE = 'dsh-lark-sdk';
-/** Core-only SDK profile used by the safety-net guardian's safe mode. */
-export const DEFAULT_SAFE_SDK_PROFILE = 'dsh-lark-safe-sdk';
 
 export interface SdkRuntimeOptions {
   /** OS home directory used to resolve the shared dsh installation. */
@@ -34,8 +32,8 @@ export interface SdkRuntimeOptions {
   /**
    * Mount the bridge callback tools (`lark_notify`, `lark_ask_user`, and
    * `lark_request_plan_approval`, and the one-shot approval answerer) in the runtime overlay. The full bridge needs
-   * them; the guardian's core-only safe profile must not (it has no callback
-   * server). Defaults to `true`.
+   * them; isolated runtimes without a callback server may disable them.
+   * Defaults to `true`.
    */
   bridgeTools?: boolean;
   /** Injectable installer for tests. */
@@ -118,7 +116,7 @@ export function patchYamlFor(options?: { bridgeTools?: boolean; own?: OwnPackage
   // ensures the skill also lands on the agent runtime's context so that
   // `skill("dsh-lark-bot")` resolves in a live SDK session. It is kept outside
   // the bridgeTools gate because it needs no callback endpoint and is also
-  // useful to the guardian's core-only safe profile. Only emitted when the
+  // useful to an isolated core-only profile. Only emitted when the
   // installed package exports `./skill` (older versions may not).
   if (has('skill')) {
     lines.push(
@@ -190,9 +188,7 @@ export function patchYamlFor(options?: { bridgeTools?: boolean; own?: OwnPackage
       `      name: '${own.name}/plan'`,
       '      config:',
       '        endpoint: !!js process.env.DSH_LARK_PLAN_URL',
-      '        policyEndpoint: !!js process.env.DSH_LARK_APPROVAL_URL',
       '        token: !!js process.env.DSH_LARK_NOTIFY_TOKEN',
-      '        mode: !!js process.env.DSH_LARK_PLAN_GATE',
       '',
     );
   }
@@ -304,9 +300,12 @@ function ownPackageLinked(profileRoot: string, own: OwnPackageInfo): boolean {
 
 function runPnpmInstall(profileRoot: string, options: { force?: boolean } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('pnpm', ['install', ...(options.force ? ['--force'] : [])], {
+    const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+    const child = spawn(command, ['install', ...(options.force ? ['--force'] : [])], {
       cwd: profileRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+      windowsHide: true,
     });
     let output = '';
     child.stdout.on('data', (chunk: Buffer) => {
@@ -324,7 +323,7 @@ function runPnpmInstall(profileRoot: string, options: { force?: boolean } = {}):
         return;
       }
       const tail = output.trim().split('\n').slice(-8).join('\n');
-      reject(new Error(`pnpm install exited with code ${String(code)}\n${tail}`));
+      reject(new Error(`${command} install exited with code ${String(code)}\n${tail}`));
     });
   });
 }

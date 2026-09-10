@@ -9,8 +9,6 @@ import { resolveAppPaths } from '../../config/app-paths.js';
 import { resolveDshHome } from '../../config/dsh-runtime.js';
 import { loadRuntimeEnv } from '../../config/env.js';
 import { ConfigStore } from '../../config/profile-store.js';
-import { readGuardianUnit } from '../../guardian/install.js';
-import { channelHealthLabel, readHeartbeat } from '../../guardian/heartbeat.js';
 import { readInstalledPackage } from '../../upgrade/detect.js';
 import { loadUpgradeState, upgradeStatePath } from '../../upgrade/state.js';
 import { compareVersions, fetchNpmLatestVersionOnce } from '../../upgrade/versions.js';
@@ -22,8 +20,8 @@ export interface DoctorOptions extends StartOptions {
   output?: (text: string) => void;
   /** Injectable npm-latest probe (tests); defaults to a short best-effort fetch. */
   probeLatestFn?: (packageName: string) => Promise<string | undefined>;
-  /** OS home used to locate the guardian service entry (tests; defaults to homedir()). */
-  guardianRoot?: string;
+  /** OS home override used by service and runtime-profile checks in tests. */
+  systemHome?: string;
   /** Injectable Feishu group-history probe (tests). */
   probeGroupHistoryFn?: (input: {
     appId: string;
@@ -91,26 +89,11 @@ export async function runDoctorChecks(
     }
   }
   try {
-    const unit = await readGuardianUnit(
-      process.platform,
-      options.guardianRoot ?? homedir(),
-    );
-    if (unit !== undefined) {
-      lines.push(
-        /_npx[\\/]/.test(unit)
-          ? 'guardian: ⚠️ 服务单元指向 npx 缓存路径（npm 清缓存后可能失效）；请重新执行 dsh-lark-bot guardian install'
-          : 'guardian: ok (服务单元路径稳定)',
-      );
-    }
-  } catch {
-    // Best effort.
-  }
-  try {
     const service = new ServiceManager({
-      profile: env.guardianProfile,
+      profile: process.env.DSH_LARK_DSH_PROFILE ?? 'dsh-lark',
       env: process.env,
       paths,
-      home: options.guardianRoot ?? homedir(),
+      home: options.systemHome ?? homedir(),
       ...(options.version ? { version: options.version } : {}),
     });
     if (await service.readMetadata()) {
@@ -126,22 +109,6 @@ export async function runDoctorChecks(
     lines.push(`service: ⚠️ 状态检查失败（${error instanceof Error ? error.message : String(error)}）`);
   }
   try {
-    // Channel readiness snapshot (issue #108): the engine heartbeat now also
-    // carries the WebSocket lifecycle, so doctor can tell "engine alive" apart
-    // from "Feishu channel ready".
-    const heartbeat = await readHeartbeat(
-      paths.profilePath(env.guardianBridgeProfile, 'guardian', 'heartbeat.json'),
-    );
-    lines.push(`channel: ${channelHealthLabel(heartbeat?.channel)}`);
-    if (heartbeat?.channel && !heartbeat.channel.ready) {
-      lines.push(
-        'channel: ⚠️ 引擎进程存活但通道未就绪（半开/重连/失败）；请检查网络路由或重启 managed engine',
-      );
-    }
-  } catch {
-    // Best effort.
-  }
-  try {
     const state = await loadUpgradeState(upgradeStatePath(env.home));
     if (state?.lastUpgrade.pendingRestart === true) {
       lines.push(
@@ -155,11 +122,11 @@ export async function runDoctorChecks(
     // Version-pin drift check for runtime profiles (issue #15): the sdk/acp
     // profiles link the bridge package; a stale link means the next boot may
     // re-provision or run an old copy. `dsh-lark-bot upgrade` repairs these.
-    const dshHome = resolveDshHome(homedir(), process.env);
+    const dshHome = resolveDshHome(options.systemHome ?? homedir(), process.env);
     const name = ownPackageInfo().name;
     const installed = await readInstalledPackage(
       dshHome,
-      env.guardianProfile ?? 'dsh-lark',
+      process.env.DSH_LARK_DSH_PROFILE ?? 'dsh-lark',
       name,
     );
     for (const runtimeProfile of ['dsh-lark-sdk', 'dsh-lark-acp']) {

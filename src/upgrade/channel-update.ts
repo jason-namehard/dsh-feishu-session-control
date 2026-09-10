@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { GuardianUpdateHandoff, GuardianUpdateRoute } from '../guardian/update-handoff.js';
+import type { ChannelUpdateRoute, InProcessChannelUpdater } from './channel-runner.js';
 import { currentVersion, isNewer, latestVersion } from './update-check.js';
 
 const OFFER_TTL_MS = 10 * 60_000;
@@ -19,7 +19,7 @@ export type ChannelUpdateDecision =
 export interface ChannelUpdateControllerOptions {
   current?: string;
   probe?: () => Promise<string | undefined>;
-  handoff: Pick<GuardianUpdateHandoff, 'start'>;
+  updater: Pick<InProcessChannelUpdater, 'start'>;
   id?: () => string;
   now?: () => number;
   offerTtlMs?: number;
@@ -32,7 +32,7 @@ interface Offer {
   expiresAt: number;
 }
 
-/** Owner-bound confirmation offers over the durable guardian handoff. */
+/** Owner-bound confirmation offers for the in-process updater. */
 export class ChannelUpdateController {
   private readonly offers = new Map<string, Offer>();
   private readonly current: string;
@@ -70,7 +70,7 @@ export class ChannelUpdateController {
     scope: string;
     actorId: string;
     decision: 'confirm' | 'cancel';
-    route: GuardianUpdateRoute;
+    route: ChannelUpdateRoute;
   }): Promise<ChannelUpdateDecision> {
     const offer = this.offers.get(input.offerId);
     if (
@@ -84,7 +84,7 @@ export class ChannelUpdateController {
     this.offers.delete(input.offerId);
     if (input.decision === 'cancel') return { kind: 'cancelled' };
     try {
-      const started = await this.options.handoff.start(offer.targetVersion, input.route);
+      const started = await this.options.updater.start(offer.targetVersion, input.route);
       return started.accepted
         ? { kind: 'started', updateId: started.id, targetVersion: offer.targetVersion }
         : { kind: 'busy', updateId: started.id };

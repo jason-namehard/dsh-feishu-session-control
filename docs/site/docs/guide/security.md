@@ -1,38 +1,42 @@
 ---
 title: 安全与权限
-description: 访问白名单、工具权限、密钥处理与项目来源 / 假冒警示。
+description: 项目来源、飞书权限、DSH 原生审批和凭据边界。
 ---
 
 # 安全与权限
 
-访问白名单、工具权限、密钥处理与项目来源 / 假冒警示。
+## 项目来源
 
-## 项目身份声明
+本项目是 [PlutoKeating/dsh-lark-bot](https://github.com/PlutoKeating/dsh-lark-bot)（AGPL-3.0）的 fork，
+由 **见川**维护。正式仓库是
+[jason-namehard/dsh-feishu-session-control](https://github.com/jason-namehard/dsh-feishu-session-control)。
 
-::: warning 当前发布说明
-本项目正式名称为 **DSH飞书Session控制**，由 **见川**维护；GitHub 地址将在发布前补入。
-npm/DSH 兼容包名暂保留为 `dsh-lark-bot`。本项目从不提供 `.exe` 或“下载即运行”的安装包，
-凡以项目名义分发 exe 的页面 / 仓库都不可信。安装命令：`npx dsh-lark-bot@latest setup --profile dsh-lark`。
-:::
+当前 fork 尚未以独立 npm 包发布。`npx dsh-lark-bot@latest` 指向上游，不是本项目安装入口。
 
-## 访问白名单
+## 飞书应用权限
 
-`DSH_LARK_ACCESS_DEFAULT_DENY=1` 会在未配置 allowlist 时拒绝 DM 流量（fail closed）；管理员用 `/invite user|admin|group <id>` 管理白名单。群聊 / 话题默认只处理 `@` 消息。
+- 卡片按钮与表单：启用 `card.action.trigger` 回调；
+- 群聊不 `@` 也接收：申请应用身份权限 `im:message.group_msg`；
+- 已读表情：申请应用身份权限 `im:message.reactions:write_only`。
 
-## 工具权限与审批
+敏感权限新增后必须发布新的飞书应用版本并等待生效。
 
-每个 scope 的 `/permission` 策略（如 `ask|allow|deny`）统一执行；默认 `ask` 时低风险自省静默放行，高风险弹「允许执行一次 / 拒绝」卡。写入成功后才回执，失败回滚。
+## 工具审批
+
+插件不设置 `ask|allow|deny` 形式的额外逐工具门禁，也不因命令是 `pwsh`、`write` 等而自行拦截。只有 DSH
+原生运行时发出审批请求时，插件才把同一请求同步到飞书。Web 或飞书任一端答复即可完成该审批。
+
+如果飞书出现审批卡，应在 DSH 日志中找到对应 `approval/request`。没有原生事件却出现卡片才属于插件问题。
+
+## Session 边界
+
+- Web 创建的 session 默认不连接飞书；
+- 半衔接不会抄送电脑端独立回合；
+- 完整衔接只抄送当前已连接 session 的新消息与回复；
+- `/detach` 解除连接但保留 session；
+- DSH 停止后飞书同步离线，没有 Guardian 或离线接管。
 
 ## 密钥与凭据
 
-- dsh 凭据（provider / 模型）与飞书 app-secret 走现有安全收集流程（owner-only 表单），原始值不经过 prompt / session / jobs / archive / logger / diagnostics。
-- 出站通知渠道（Telegram / WeCom）凭据存于 `<profile>/notification-channels.json`（0600），**从不回显**，不进入日志 / 诊断包。
-- 本地 callback（`lark_notify` 等）走 127.0.0.1 + 每启动随机 token，不暴露公网。
-
-## 计划门禁
-
-较大或高风险动作先在批准前出完整计划；`deny` 优先于计划门禁，`allow` 不替代关键任务计划确认。
-
-## 最小权限与安全网
-
-安全网守护独立于 dsh 进程，只在「观察过 dsh 在线 且 心跳过期 / 无 dsh 进程」时接管飞书长连接（同 app 单长连接约束，dsh 在线时守护必须静默）。
+不要把飞书 App Secret、模型 API key、真实 `.env`、DSH 凭据文件或本机认证 URL 提交到 Git。诊断、日志与
+卡片不得回显完整密钥。

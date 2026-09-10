@@ -130,7 +130,7 @@ export async function runBotCommand(
   const dshHome = paths.botDshHome(name);
   const setup = deps.setup ?? runSetup;
   const ensure = deps.ensureProfile ?? ensureBotProfile;
-  await setup({ profile: dshProfile, dshHome, guardian: false });
+  await setup({ profile: dshProfile, dshHome });
   await ensure(configs, { env: runtime, profileName: name, allowOnboarding: true });
   await fleet.add({ name, bridgeProfile: name, dshProfile, dshHome });
   const service = serviceFor(dshProfile, instanceEnv(sourceEnv, name, dshHome));

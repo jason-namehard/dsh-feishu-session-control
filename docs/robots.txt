@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://dsh-lark-bot.arr2018.dpdns.org/sitemap.xml
+Sitemap: https://jason-namehard.github.io/dsh-feishu-session-control/sitemap.xml

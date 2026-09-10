@@ -27,7 +27,7 @@ import { startChannel } from '../../src/bridge/channel.js';
 import { SessionStore } from '../../src/session/store.js';
 import { WorkspaceStore } from '../../src/workspace/store.js';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { JobLedger } from '../../src/bot/job-ledger.js';
 import { ExecutionModeStore } from '../../src/bot/execution-mode-store.js';
@@ -146,7 +146,7 @@ function message(overrides: Partial<NormalizedMessage> = {}): NormalizedMessage 
 }
 
 describe('startChannel', () => {
-  it('lets only the bound profile admin confirm an update card and starts the guardian handoff', async () => {
+  it('lets only the bound profile admin confirm an update card and starts the in-process update', async () => {
     const fake = makeChannel();
     const decide = vi.fn().mockResolvedValue({
       kind: 'started', updateId: 'update-1', targetVersion: '0.19.0',
@@ -889,7 +889,7 @@ describe('startChannel', () => {
     }));
     expect(pending.push).toHaveBeenCalledWith('chat-1', expect.objectContaining({
       content: 'work in project b',
-      workspaceCwd: '/tmp',
+      workspaceCwd: resolve('/tmp'),
     }));
 
     isolationMode = 'member';

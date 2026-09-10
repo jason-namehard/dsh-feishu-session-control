@@ -1,5 +1,6 @@
 import { redactSecrets, truncateUtf8Safe } from '../config/security.js';
 import type { DshSessionSummary } from '../session/projection-protocol.js';
+import type { FeishuConnectionMode } from '../session/projection-store.js';
 import { localizedCard, type CardLocale } from './i18n.js';
 
 export interface SessionActionIdentity {
@@ -75,6 +76,69 @@ export function renderSessionBindingConfirmCard(input: {
   return localizedCard({
     zhCn: { summary: '确认切换 DSH 会话', body: body('zh_cn') },
     enUs: { summary: 'Confirm DSH session switch', body: body('en_us') },
+  });
+}
+
+export function renderSessionConnectionModeCard(input: {
+  nonce: string;
+  identity: SessionActionIdentity;
+  sessionId: string;
+  currentMode: FeishuConnectionMode;
+}): object {
+  const body = (locale: CardLocale) => {
+    const zh = locale === 'zh_cn';
+    const value = {
+      cmd: 'session-connection',
+      nonce: input.nonce,
+      scope: input.identity.scope,
+      workspaceCwd: input.identity.workspaceCwd,
+      actorId: input.identity.actorId,
+      sessionId: input.sessionId,
+    };
+    return {
+      elements: [
+        {
+          tag: 'markdown',
+          content: [
+            zh ? '**选择飞书衔接模式**' : '**Choose Feishu connection mode**',
+            '',
+            `${zh ? '当前模式' : 'Current mode'}：**${input.currentMode === 'full' ? (zh ? '完整衔接' : 'Full') : (zh ? '半衔接' : 'Half')}**`,
+            '',
+            zh
+              ? '半衔接：只把飞书发起的任务结果返回飞书；电脑端另行发起的消息不会抄送。'
+              : 'Half: only Feishu-origin task results return to Feishu; separate Web turns are not mirrored.',
+            zh
+              ? '完整衔接：电脑端在这个 session 中发起的新消息和回复也会抄送飞书。'
+              : 'Full: new Web-origin messages and replies in this session are mirrored to Feishu too.',
+          ].join('\n'),
+        },
+        {
+          tag: 'column_set',
+          flex_mode: 'none',
+          horizontal_spacing: 'default',
+          columns: [
+            {
+              tag: 'column', width: 'auto', elements: [{
+                tag: 'button', type: input.currentMode === 'half' ? 'primary' : 'default',
+                text: { tag: 'plain_text', content: zh ? '半衔接' : 'Half' },
+                value: { ...value, action: 'half' },
+              }],
+            },
+            {
+              tag: 'column', width: 'auto', elements: [{
+                tag: 'button', type: input.currentMode === 'full' ? 'primary' : 'default',
+                text: { tag: 'plain_text', content: zh ? '完整衔接' : 'Full' },
+                value: { ...value, action: 'full' },
+              }],
+            },
+          ],
+        },
+      ],
+    };
+  };
+  return localizedCard({
+    zhCn: { summary: '切换飞书衔接模式', body: body('zh_cn') },
+    enUs: { summary: 'Switch Feishu connection mode', body: body('en_us') },
   });
 }
 

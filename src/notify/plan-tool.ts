@@ -1,93 +1,25 @@
 import type { Context } from '@deepseek-ai/cordis';
-import { log } from '../core/logger.js';
 import {
   objectArgs,
   requiredString,
   type RawToolExecution,
   type ToolPluginContext,
 } from './raw-tool.js';
-import {
-  isHighRiskTool,
-  planGateDenial,
-  policyDenialText,
-  type PlanPolicyExecution,
-  type PolicyDenial,
-} from '../policy/tool-policy.js';
-
-export { isHighRiskTool, type PlanPolicyExecution } from '../policy/tool-policy.js';
 
 export const name = 'lark-plan-approval';
 export const inject = ['tools'];
 
 export interface Config {
   endpoint?: string;
-  policyEndpoint?: string;
   token?: string;
-  mode?: 'strict' | 'off';
 }
 
-type PlanGateMode = NonNullable<Config['mode']>;
-
-type PlanPolicyContext = ToolPluginContext & {
-  on(
-    event: 'agent/pre-step',
-    listener: (
-      payload: { agent: object; turn: number },
-      next: () => Promise<unknown>,
-    ) => Promise<unknown>,
-  ): unknown;
-  on(
-    event: 'tools/pre-execute',
-    listener: (
-      execution: PlanPolicyExecution,
-      next: () => Promise<unknown>,
-    ) => Promise<unknown>,
-  ): unknown;
-};
-
-/** Human plan gate for substantial or high-risk repository actions. */
+/** Optional user-decision card; it never intercepts or denies tool execution. */
 export function apply(ctx: Context, config: Config = {}) {
-  const policyCtx = ctx as PlanPolicyContext;
-  const currentTurns = new WeakMap<object, number>();
-  const approvedCalls = new WeakMap<object, number>();
-  const gateDisabled = planGateMode(config.mode ?? process.env.DSH_LARK_PLAN_GATE) === 'off';
-  // Say which mode is live at startup. The gate is what produces every
-  // "Execute high-risk tool ..." card, and it is configured through an
-  // environment variable, so whether it is on depends on how dsh was launched
-  // — guardian relaunches, for instance, inherit only guardian's own
-  // environment. Without this line the only way to tell is to trigger a tool
-  // and see whether a card appears.
-  log.info('plan-gate', gateDisabled ? 'disabled' : 'enabled', {
-    source: config.mode !== undefined ? 'config' : 'env',
-  });
-
-  policyCtx.on('agent/pre-step', async (payload, next) => {
-    currentTurns.set(payload.agent, payload.turn);
-    return next();
-  });
-  policyCtx.on('tools/pre-execute', async (execution, next) => {
-    const policyDecision = await checkPermissionPolicy(config, execution);
-    if (policyDecision?.denial) {
-      return { kind: 'deny', reason: policyDenialText(policyDecision.denial) };
-    }
-    if (gateDisabled) return next();
-    if (!isHighRiskTool(policyCtx, execution)) return next();
-    const agent = execution.agent;
-    const turn = agent ? currentTurns.get(agent) : undefined;
-    if (agent && turn !== undefined && approvedCalls.get(agent) === turn) {
-      approvedCalls.delete(agent);
-      return next();
-    }
-    return {
-      kind: 'deny',
-      reason: policyDenialText(planGateDenial()),
-    };
-  });
-
-  policyCtx.tools.register({
+  (ctx as ToolPluginContext).tools.register({
     name: 'lark_request_plan_approval',
     description:
-      'Before modifying files, running scripts, or taking another substantial/high-risk action, draft a complete plan and call this tool before execution. It sends the full plan as a normal Feishu/Lark message, then waits for Approve or Continue planning plus optional feedback. Do not execute until approved. If revision is requested, revise the plan and call this tool again.',
+      'Ask the user to choose or approve a genuinely ambiguous execution plan in Feishu/Lark. Use only when the task has materially different options or the user explicitly requested a plan decision; ordinary tool calls use DSH native approval and must not be blocked by this tool.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -159,10 +91,6 @@ export function apply(ctx: Context, config: Config = {}) {
         }
         throw new Error(body.error ?? `plan approval delivery failed (${response.status})`);
       }
-      if (body.decision === 'approved' && exec?.agent) {
-        const turn = currentTurns.get(exec.agent);
-        if (turn !== undefined) approvedCalls.set(exec.agent, turn);
-      }
       return {
         resolved: true,
         decision: body.decision,
@@ -170,61 +98,4 @@ export function apply(ctx: Context, config: Config = {}) {
       };
     },
   });
-}
-
-async function checkPermissionPolicy(
-  config: Config,
-  execution: PlanPolicyExecution,
-): Promise<{ policy: 'ask' | 'allow' | 'deny'; denial?: PolicyDenial } | undefined> {
-  const endpoint = config.policyEndpoint ?? process.env.DSH_LARK_APPROVAL_URL;
-  const token = config.token ?? process.env.DSH_LARK_NOTIFY_TOKEN;
-  const sessionId = (execution.agent as { session?: { id?: unknown } } | undefined)?.session?.id;
-  if (!endpoint || !token || sessionId === undefined) return undefined;
-  try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        token,
-        sessionId: String(sessionId),
-        toolName: execution.name,
-        policyCheckOnly: true,
-      }),
-    });
-    const body = await response.json() as { ok?: boolean; policy?: unknown; denial?: unknown };
-    if (!response.ok || body.ok !== true || !isPermissionPolicy(body.policy)) {
-      return { policy: 'deny', denial: unavailablePolicyDenial(execution.name) };
-    }
-    return {
-      policy: body.policy,
-      ...(isPolicyDenial(body.denial) ? { denial: body.denial } : {}),
-    };
-  } catch {
-    return { policy: 'deny', denial: unavailablePolicyDenial(execution.name) };
-  }
-}
-
-function unavailablePolicyDenial(toolName: string): PolicyDenial {
-  return {
-    layer: 'permission-policy',
-    reason: `the bridge could not verify the scope policy before tool ${toolName}`,
-    toChange: 'restore the local bridge approval callback before retrying the tool',
-  };
-}
-
-function isPermissionPolicy(value: unknown): value is 'ask' | 'allow' | 'deny' {
-  return value === 'ask' || value === 'allow' || value === 'deny';
-}
-
-function isPolicyDenial(value: unknown): value is PolicyDenial {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const denial = value as Partial<PolicyDenial>;
-  return (
-    denial.layer === 'plan-gate' || denial.layer === 'permission-policy' ||
-    denial.layer === 'tool-approval' || denial.layer === 'file-sandbox'
-  ) && typeof denial.reason === 'string' && typeof denial.toChange === 'string';
-}
-
-function planGateMode(value: unknown): PlanGateMode {
-  return value === 'off' ? 'off' : 'strict';
 }

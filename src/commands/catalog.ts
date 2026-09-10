@@ -8,6 +8,8 @@ export interface CommandDefinition {
 export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { names: ['/sessions'], area: 'session', zh: 'list DSH sessions and aliases', en: 'list DSH sessions and their aliases' },
   { names: ['/use'], area: 'session', zh: '`<MMDD-N>` - switch to a named session', en: '`<MMDD-N>` - switch to a named DSH session' },
+  { names: ['/switch'], area: 'session', zh: '选择半衔接或完整衔接', en: 'choose half or full Feishu connection mode' },
+  { names: ['/detach'], area: 'session', zh: '断开飞书连接但保留 DSH 会话', en: 'detach Feishu without deleting the DSH session' },
   { names: ['/delete'], area: 'session', zh: '`<MMDD-N>` - move a named session to the recycle bin after confirmation', en: '`<MMDD-N>` - move a named DSH session to the recycle bin after confirmation' },
   { names: ['/purge'], area: 'session', zh: '`<MMDD-N>` - permanently delete a named session after confirmation', en: '`<MMDD-N>` - permanently delete a named DSH session after confirmation' },
   { names: ['/rename'], area: 'session', zh: '`<MMDD-N> [名称]` - 给会话命名，网页端同步显示', en: '`<MMDD-N> [name]` - name a session; the Web UI shows the same name' },
@@ -24,7 +26,6 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { names: ['/stop'], area: 'operations', zh: '终止当前 scope 的任务', en: 'stop tasks in the current scope' },
   { names: ['/timeout'], area: 'operations', zh: '`[N|off|default]` — 查看或设置空闲超时', en: '`[N|off|default]` — view or set idle timeout' },
   { names: ['/concurrency'], area: 'operations', zh: '`[N|default]` — 查看或设置 scope 并行数', en: '`[N|default]` — view or set scope concurrency' },
-  { names: ['/permission'], area: 'policy', zh: '`[ask|allow|deny] [scope]` — 工具权限策略', en: '`[ask|allow|deny] [scope]` — tool permission policy' },
   { names: ['/isolation'], area: 'policy', zh: '`[group|topic|member]` — 群会话隔离（设置需管理员）', en: '`[group|topic|member]` — group isolation (admin to set)' },
   { names: ['/mention'], area: 'policy', zh: '`on|off|default [chatId]` — 本群（或指定群）是否必须 @ 机器人才回复', en: '`on|off|default [chatId]` — whether this (or a named) group needs an @-mention' },
   { names: ['/role'], area: 'configuration', zh: '`list|show|set|clear|save|remove …` — 管理角色', en: '`list|show|set|clear|save|remove …` — manage roles' },

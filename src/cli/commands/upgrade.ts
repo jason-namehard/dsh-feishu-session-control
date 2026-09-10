@@ -5,13 +5,12 @@
  * a single command brings the installation up to date:
  *
  *   1. the package inside the dsh profile (`dsh plugin add <name>@<target>`),
- *   2. the safety-net guardian (idempotent reinstall + service restart),
+ *   2. linked runtime profile repair,
  *   3. post-upgrade verification (doctor checks).
  *
  * Running instances are handled safely: by default the command only *warns*
  * and prints the restart command; `--restart` additionally restarts the
- * guardian service and, for managed/detached profile processes, the profile
- * itself. Config, sessions, archives and credentials under `~/.dsh-lark` are
+ * managed/detached profile process. Config, sessions, archives and credentials under `~/.dsh-lark` are
  * never touched. Every change is recorded in `~/.dsh-lark/upgrade-state.json`
  * so `--rollback` can deterministically reinstall the previous version.
  */
@@ -26,16 +25,12 @@ import {
   resolveDshHome,
 } from '../../config/dsh-runtime.js';
 import { loadRuntimeEnv } from '../../config/env.js';
-import { installGuardian } from '../../guardian/install.js';
 import {
   detectUpgradeState,
   readInstalledPackage,
   type UpgradeDetection,
 } from '../../upgrade/detect.js';
-import {
-  restartGuardianService,
-  restartProfileProcess,
-} from '../../upgrade/service.js';
+import { restartProfileProcess } from '../../upgrade/service.js';
 import {
   loadUpgradeState,
   saveUpgradeState,
@@ -61,9 +56,7 @@ export interface UpgradeOptions {
   check?: boolean;
   /** Skip the interactive confirmation. Non-TTY runs fail closed without it. */
   yes?: boolean;
-  /** Upgrade the guardian too (default true; `--no-guardian` opts out). */
-  guardian?: boolean;
-  /** Restart the guardian service and (managed) dsh profile after upgrading. */
+  /** Restart the managed/detached dsh profile after upgrading. */
   restart?: boolean;
   /** Reinstall the previously recorded version instead of the latest. */
   rollback?: boolean;
@@ -75,21 +68,19 @@ export interface UpgradeOptions {
   // Test seams -------------------------------------------------------------
   dshHome?: string;
   larkHome?: string;
-  /** Root for guardian service-entry / state paths (tests; defaults to homedir). */
-  guardianRoot?: string;
+  /** Bridge profile checked by doctor after the upgrade. */
+  bridgeProfile?: string;
   /** dsh CLI bin override for `dsh plugin add` (tests / unusual layouts). */
   dshBin?: string;
   output?: (text: string) => void;
   confirmFn?: (prompt: string) => Promise<boolean>;
   fetchLatestFn?: typeof fetchNpmLatestVersion;
-  installGuardianFn?: typeof installGuardian;
-  restartGuardianFn?: typeof restartGuardianService;
   restartProfileFn?: typeof restartProfileProcess;
   pluginSpawnFn?: typeof runDshPlugin;
   runDoctorFn?: typeof runDoctorChecks;
   repairRuntimeFn?: typeof repairRuntimeProfiles;
   readInstalledPackageFn?: typeof readInstalledPackage;
-  listProcessesFn?: typeof import('../../guardian/process.js').listProcesses;
+  listProcessesFn?: typeof import('../../platform/process.js').listProcesses;
   stateFile?: string;
 }
 
@@ -199,16 +190,6 @@ function reportVersions(
     out,
     `dsh 进程: ${detection.profileProcess ? `运行中 (pid ${detection.profileProcess.pid})` : '未运行'}\n`,
   );
-  write(
-    out,
-    `guardian: ${detection.guardian.installed ? '已安装' : '未安装'}${
-      detection.guardian.running ? ' / 运行中' : ' / 未运行'
-    }\n`,
-  );
-  write(
-    out,
-    `bridge 心跳: ${detection.heartbeatFresh ? '新鲜' : '过期/无'}\n`,
-  );
 }
 
 export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
@@ -218,7 +199,6 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
   const home = options.larkHome ?? resolveAppPaths().root;
   const dshHome = options.dshHome ?? resolveDshHome(homedir(), process.env);
   const profile = options.profile ?? 'dsh-lark';
-  const guardian = options.guardian !== false;
   const stateFile =
     options.stateFile ?? upgradeStatePath(home);
   const confirm = options.confirmFn ?? defaultConfirm;
@@ -226,8 +206,7 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
   const detection = await detectUpgradeState({
     profile,
     dshHome,
-    larkHome: home,
-    ...(options.guardianRoot ? { guardianRoot: options.guardianRoot } : {}),
+    ...(options.bridgeProfile ? { bridgeProfile: options.bridgeProfile } : {}),
     ...(options.listProcessesFn ? { listProcessesFn: options.listProcessesFn } : {}),
   });
 
@@ -257,14 +236,12 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
   const installedVersion = detection.installed?.version;
   const packageChanged =
     installedVersion === undefined || compareVersions(target.version, installedVersion) !== 0;
-  const guardianMissing = guardian && !detection.guardian.installed;
-
   // Nothing to do?
-  if (!packageChanged && !guardianMissing && !options.force && !options.packageSpec) {
+  if (!packageChanged && !options.force && !options.packageSpec) {
     reportVersions(out, detection, target.version);
     write(
       out,
-      `✅ ${own.name} 已是最新（${installedVersion}），guardian 状态正常，无需升级。\n`,
+      `✅ ${own.name} 已是最新（${installedVersion}），无需升级。\n`,
     );
     return;
   }
@@ -276,13 +253,8 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
       `  • 包本体: ${detection.installed?.version ?? '未安装'} → ${target.version}`,
     );
   }
-  if (guardian) {
-    changeLines.push(
-      `  • guardian: ${detection.guardian.installed ? '重新安装并重启服务' : '安装服务'}`,
-    );
-  }
   if (options.restart) {
-    changeLines.push('  • 重启: 将尝试重启 guardian 服务与运行中的 dsh profile 进程');
+    changeLines.push('  • 重启: 将尝试重启运行中的 dsh profile 进程');
   }
   write(out, `即将执行：\n${changeLines.join('\n')}\n`);
 
@@ -355,35 +327,7 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
     write(out, `包本体无需变更（已安装 ${installedVersion}）。\n`);
   }
 
-  // 2. Guardian: idempotent reinstall (rewrites the service entry to the new
-  //    cli.js) then restart so the resident process runs the new code.
-  if (guardian) {
-    const install = options.installGuardianFn ?? installGuardian;
-    const result = await install({ env, dshProfile: profile });
-    for (const message of result.messages) write(out, `${message}\n`);
-    if (result.ok) {
-      if (options.restart) {
-        const restart = options.restartGuardianFn ?? restartGuardianService;
-        const restarted = await restart(process.platform, {});
-        write(out, `${restarted.message}\n`);
-        if (!restarted.ok) write(out, '提示：可稍后手动执行 dsh-lark-bot guardian status 检查。\n');
-      } else {
-        write(
-          out,
-          '提示：guardian 服务已更新，但仍在运行旧代码；如需立即生效请执行 dsh-lark-bot guardian install 后重启服务，或加 --restart 重跑。\n',
-        );
-      }
-    } else {
-      write(out, '注意：guardian 服务未完全启用，请按上方提示手动处理；可稍后重跑 dsh-lark-bot guardian install。\n');
-    }
-  } else {
-    write(out, '已跳过 guardian（--no-guardian）。\n');
-  }
-
-  // 3. Record the change before verification/restart. A channel-triggered
-  //    worker can live in the managed profile's systemd cgroup and therefore
-  //    be terminated by the final profile restart; rollback evidence must be
-  //    durable before that intentional self-termination point.
+  // 2. Record the change before verification/restart so rollback evidence is durable.
   let record: UpgradeRecord | undefined;
   if (packageChanged) {
     record = {
@@ -392,7 +336,6 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
       toVersion: target.version,
       profile,
       packageSpec: target.spec,
-      guardianInstalled: guardian,
       pendingRestart: detection.profileProcess !== undefined,
     };
     await saveUpgradeState(stateFile, { schemaVersion: 1, lastUpgrade: record });
@@ -402,7 +345,7 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
     );
   }
 
-  // 4. Verify before the final profile restart for the same reason: a
+  // 3. Verify before the final profile restart: a
   //    service controller may kill this caller's entire cgroup.
   write(out, '\n--- 升级后验证（doctor）---\n');
   const doctor = await (options.runDoctorFn ?? runDoctorChecks)({
@@ -417,7 +360,7 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
     write(out, '✅ 升级后验证通过。\n');
   }
 
-  // 5. Optional profile-process restart is deliberately last.
+  // 4. Optional profile-process restart is deliberately last.
   if (options.restart && detection.profileProcess) {
     const restartProfile = options.restartProfileFn ?? restartProfileProcess;
     const restarted = await restartProfile(profile, {});

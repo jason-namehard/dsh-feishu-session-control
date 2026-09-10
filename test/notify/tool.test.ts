@@ -39,7 +39,7 @@ describe('lark_notify tool plugin', () => {
         scope: 'chat-a',
         mention_user_ids: ['ou_user1'],
       },
-      {} as never,
+      { agent: { session: { id: 'session-1' } } } as never,
     );
     expect(result).toEqual({ ok: true, chatId: 'oc_group' });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -48,6 +48,7 @@ describe('lark_notify tool plugin', () => {
         method: 'POST',
         body: JSON.stringify({
           token: 'secret',
+          sessionId: 'session-1',
           text: 'hello',
           scope: 'chat-a',
           mentions: [{ userId: 'ou_user1' }],

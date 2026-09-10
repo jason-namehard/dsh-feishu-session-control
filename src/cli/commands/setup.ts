@@ -5,8 +5,6 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { discoverDshBin, resolveDshHome } from '../../config/dsh-runtime.js';
 import { ownPackageInfo } from '../../adapters/dsh/own-package.js';
-import { loadRuntimeEnv } from '../../config/env.js';
-import { installGuardian } from '../../guardian/install.js';
 
 export interface SetupOptions {
   /** dsh profile to install the bundle into (default `dsh-lark`). */
@@ -19,13 +17,6 @@ export interface SetupOptions {
   dshHome?: string;
   /** dsh CLI bin override (tests). */
   bin?: string;
-  /**
-   * Install the safety-net guardian as a system service. Defaults to true:
-   * the guardian is a core, always-installed feature; pass `false` to opt out.
-   */
-  guardian?: boolean;
-  /** Injectable guardian installer (tests). */
-  installGuardianFn?: typeof installGuardian;
 }
 
 /**
@@ -56,8 +47,6 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
       '未找到本机 dsh 安装（`@deepseek-ai/dsh`）。请先安装 DeepSeek Harness，再运行本命令。',
     );
   }
-  const installGuardianService = options.guardian !== false;
-
   // Pre-approve pnpm >= 10 build scripts so the first `dsh plugin add`
   // succeeds without a manual pnpm-workspace.yaml edit (protobufjs is a
   // transitive dependency of the Feishu channel SDK).
@@ -80,22 +69,6 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     await runDshPlugin(bin, webProfile, packageSpec, { ...process.env, DSH_HOME: dshHome });
   }
 
-  if (installGuardianService) {
-    const install = options.installGuardianFn ?? installGuardian;
-    const guardianResult = await install({
-      env: loadRuntimeEnv(process.env),
-      dshProfile: profile,
-    });
-    for (const message of guardianResult.messages) {
-      process.stdout.write(`${message}\n`);
-    }
-    if (!guardianResult.ok) {
-      process.stdout.write(
-        '\n注意：guardian 服务未完全启用，请按上方提示手动执行；也可稍后重跑 `dsh-lark-bot guardian install`。\n',
-      );
-    }
-  }
-
   process.stdout.write(
     [
       '',
@@ -108,17 +81,6 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
       '',
       '首次启动会在终端打印二维码，用飞书 / Lark 扫码完成一次性绑定；',
       '绑定后 dsh 即以标准插件方式加载 dsh-lark-bot 的桥接引擎。',
-      ...(installGuardianService
-        ? [
-            '',
-            '安全网守护已默认安装：dsh 全部下线后仍可通过飞书发送 /safemode 进入仅核心安全模式自救。',
-            '查看状态：dsh-lark-bot guardian status',
-            '不需要时可跳过安装：npx dsh-lark-bot@latest setup --no-guardian',
-          ]
-        : [
-            '',
-            '提示：本次未安装安全网守护（--no-guardian）。需要时随时执行 dsh-lark-bot guardian install。',
-          ]),
       '',
     ].join('\n'),
   );

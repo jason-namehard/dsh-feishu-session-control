@@ -6,6 +6,7 @@ import { writeFileAtomic } from '../platform/atomic-write.js';
 export type ProjectionRole = 'user' | 'assistant';
 export type ProjectionSource = 'feishu' | 'web' | 'tui' | 'other-dsh-client';
 export type ProjectionRenderMode = 'text' | 'post' | 'card';
+export type FeishuConnectionMode = 'half' | 'full';
 
 export interface ProjectedMessage {
   dshMessageId?: string;
@@ -37,6 +38,8 @@ export interface SessionProjectionBinding {
   sessionId: string;
   chatId: string;
   threadId?: string;
+  /** Half mirrors Feishu-origin turns only; full also mirrors Web/TUI turns. */
+  connectionMode: FeishuConnectionMode;
   lastProjectedSeq: number;
   /** Binding is exclusive, but live delivery waits until this snapshot is acknowledged. */
   pendingHistoryThroughSeq?: number;
@@ -116,6 +119,29 @@ export class SessionProjectionStore {
     }, { step: 'remove-session', sessionId });
   }
 
+  async remove(scope: string, workspaceCwd: string): Promise<SessionProjectionBinding | undefined> {
+    return this.commit(async () => {
+      const key = keyFor(scope, workspaceCwd);
+      const binding = this.data.bindings[key];
+      if (!binding) return undefined;
+      delete this.data.bindings[key];
+      return cloneBinding(binding);
+    }, { step: 'remove-binding', scope, workspaceCwd });
+  }
+
+  async setConnectionMode(
+    scope: string,
+    workspaceCwd: string,
+    mode: FeishuConnectionMode,
+  ): Promise<SessionProjectionBinding | undefined> {
+    return this.commit(async () => {
+      const binding = this.data.bindings[keyFor(scope, workspaceCwd)];
+      if (!binding) return undefined;
+      binding.connectionMode = mode;
+      return cloneBinding(binding);
+    }, { step: 'set-connection-mode', scope, workspaceCwd, mode });
+  }
+
   async bindExclusive(input: {
     scope: string;
     workspaceCwd: string;
@@ -124,6 +150,7 @@ export class SessionProjectionStore {
     threadId?: string;
     initialSeq: number;
     pendingInitialHistory?: boolean;
+    connectionMode?: FeishuConnectionMode;
     /** Only an already-authorized administrator may displace another scope. */
     allowCrossScopeMigration?: boolean;
     /** Owner disclosed by the confirmation card; any change makes it stale. */
@@ -154,6 +181,7 @@ export class SessionProjectionStore {
         sessionId: input.sessionId,
         chatId: input.chatId,
         ...(input.threadId ? { threadId: input.threadId } : {}),
+        connectionMode: input.connectionMode ?? 'full',
         lastProjectedSeq: input.pendingInitialHistory ? -1 : input.initialSeq,
         ...(input.pendingInitialHistory ? { pendingHistoryThroughSeq: input.initialSeq } : {}),
         ...(currentOwner?.activeTurn ? { activeTurn: structuredClone(currentOwner.activeTurn) } : {}),
@@ -329,6 +357,7 @@ function normalizeBinding(value: unknown): SessionProjectionBinding | undefined 
     sessionId: item.sessionId,
     chatId: item.chatId,
     ...(typeof item.threadId === 'string' && item.threadId ? { threadId: item.threadId } : {}),
+    connectionMode: item.connectionMode === 'full' ? 'full' : 'half',
     lastProjectedSeq: item.lastProjectedSeq as number,
     ...(Number.isSafeInteger(item.pendingHistoryThroughSeq) && (item.pendingHistoryThroughSeq ?? -2) >= -1
       ? { pendingHistoryThroughSeq: item.pendingHistoryThroughSeq as number }
