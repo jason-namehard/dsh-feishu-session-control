@@ -1,6 +1,6 @@
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   formatEnvFile,
@@ -58,7 +58,7 @@ describe('snapshotServiceEnv', () => {
     expect(env).toEqual({
       DSH_LARK_PROVIDER: 'deepseek-official',
       DSH_LARK_MODEL: 'shell-model',
-      PATH: `${NODE_BIN_DIR}:/usr/bin`,
+      PATH: [NODE_BIN_DIR, '/usr/bin'].join(delimiter),
     });
   });
 
@@ -75,14 +75,22 @@ describe('snapshotServiceEnv', () => {
 
   it('keeps the stable inherited PATH when restarted by an update worker', () => {
     const env = snapshotServiceEnv(
-      { DSH_LARK_UPDATE_WORKER: '1', PATH: '/tmp/update-worker/node_modules/.bin:/usr/bin' },
+      { DSH_LARK_UPDATE_WORKER: '1', PATH: ['/tmp/update-worker/node_modules/.bin', '/usr/bin'].join(delimiter) },
       [],
-      { PATH: '/home/user/.local/bin:/usr/bin', DSH_LARK_MODEL: 'saved-model' },
+      { PATH: ['/home/user/.local/bin', '/usr/bin'].join(delimiter), DSH_LARK_MODEL: 'saved-model' },
     );
     expect(env).toEqual({
-      PATH: `${NODE_BIN_DIR}:/home/user/.local/bin:/usr/bin`,
+      PATH: [NODE_BIN_DIR, '/home/user/.local/bin', '/usr/bin'].join(delimiter),
       DSH_LARK_MODEL: 'saved-model',
     });
+  });
+
+  it('uses the worker PATH when there is no previous service PATH', () => {
+    const env = snapshotServiceEnv({
+      DSH_LARK_UPDATE_WORKER: '1',
+      PATH: ['/tmp/update-worker/node_modules/.bin', '/usr/bin'].join(delimiter),
+    });
+    expect(env.PATH).toBe([NODE_BIN_DIR, '/usr/bin'].join(delimiter));
   });
 
   it('strips npx / node_modules/.bin from the snapshotted PATH (issue #111)', () => {

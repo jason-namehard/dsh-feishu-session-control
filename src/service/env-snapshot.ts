@@ -26,10 +26,14 @@ export function snapshotServiceEnv(
   inherited: NodeJS.ProcessEnv = {},
 ): Record<string, string> {
   const env: Record<string, string> = {};
+  const updateWorker = source.DSH_LARK_UPDATE_WORKER === '1';
   for (const candidate of [inherited, source]) {
     for (const [key, value] of Object.entries(candidate)) {
       if (value === undefined) continue;
       if (INTERNAL_KEYS.has(key)) continue;
+      // Update workers may run with a temporary npm PATH; keep the service's
+      // previous PATH when one exists.
+      if (key === 'PATH' && candidate === source && updateWorker && inherited.PATH) continue;
       if (
         key.startsWith('DSH_LARK_') ||
         (EXTRA_KEYS as readonly string[]).includes(key) ||
