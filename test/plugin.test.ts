@@ -28,6 +28,7 @@ function makeCtx() {
   let settingsConsumer: ((ctx: unknown) => void | Promise<void>) | undefined;
   const ctx = {
     logger: { info: vi.fn(), warn: vi.fn() },
+    effect: vi.fn((setup: () => () => Promise<void>) => setup()),
     reflect: {
       provide: (name: string, value: unknown) => {
         provided[name] = value;
@@ -171,6 +172,8 @@ describe('dsh-lark-bot bundle plugin', () => {
     expect(createChannel).toHaveBeenCalled();
     expect(adapter.dispose).not.toHaveBeenCalled();
 
+    expect(ctx.effect).toHaveBeenCalledOnce();
+    await ctx.effect.mock.results[0]!.value();
     await dispose();
     expect(channel.disconnect).toHaveBeenCalled();
     expect(service.status().state).toBe('stopped');

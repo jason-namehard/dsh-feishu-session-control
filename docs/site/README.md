@@ -14,7 +14,7 @@
 
 ```bash
 cd docs/site
-pnpm install
+pnpm install --ignore-workspace --frozen-lockfile
 pnpm dev          # VitePress dev server
 pnpm build        # vitepress build docs → dist/
 pnpm preview      # vitepress preview docs

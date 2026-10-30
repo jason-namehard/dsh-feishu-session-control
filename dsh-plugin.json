@@ -30,7 +30,7 @@
     "repository": "https://github.com/jason-namehard/dsh-feishu-session-control"
   },
   "artifact": {
-    "digest": "sha256:406df6a8d5b5a5f91b8aa177bb0dcb53b644cd08fa706ea2ff942ce9836568ee",
+    "digest": "sha256:7daf3dba950cf2e9b38346c7ab71a5acbdf32b0b14774a9e365a0007003c4853",
     "algorithm": "sha256",
     "path": "dist/plugin.js"
   },

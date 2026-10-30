@@ -33,7 +33,8 @@ DSH 插件模式优先使用进程内 `host` adapter：
 
 ## 版本锁定规则
 
-- DSH 仍是预发布版本，SDK client/server/ACP 使用精确版本，不用宽松范围；npm `next` 的 `0.1.7-rc.2` 尚未完成全插件适配，不随默认 `latest` 升级；
+- DSH 仍是预发布版本，兼容探针中的 SDK client/server/ACP 使用精确版本；插件的宿主版本范围由 `package.json` 的 peer dependencies 声明；
+- 本地开发和 CI 使用 DSH `0.1.5-rc.3` 与 Cordis `4.0.2`，插件也接受 `package.json` 中声明的其他宿主版本；
 - `package.json`、`pnpm-lock.yaml`、`src/config/dsh-compat.ts` 和 `dshWorkshop.compatibility` 必须一致；
 - 本包不直接依赖多份 DSH tool scheduler；桥接工具在受控边界注册；
 - 升级不得只改全局 DSH CLI，必须重新验证 host services、session 事件、审批和插件加载。

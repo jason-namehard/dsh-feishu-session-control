@@ -1,15 +1,15 @@
 /**
  * Single source of truth for the DeepSeek Harness compatibility matrix.
  *
- * The bridge pins exact pre-release versions so a release is reproducible.
- * When upstream publishes a stable version, bump every field here, update
- * `package.json` (exact version), run `pnpm ci:local` plus the compatibility
- * probe, then refresh `verifiedAt`. See `docs/COMPATIBILITY.md`.
+ * Managed runtimes and the compatibility probe use exact pre-release versions.
+ * The host plugin's supported versions are declared in package peer dependencies.
+ * When updating this matrix, run `pnpm ci:local` and the compatibility probe,
+ * then refresh `verifiedAt`. See `docs/COMPATIBILITY.md`.
  */
 export interface DshCompatibility {
   /** DeepSeek Harness CLI (`dsh`) version verified against this bot release. */
   harness: string;
-  /** `@deepseek-ai/dsh-sdk-client` version the bridge is pinned to. */
+  /** `@deepseek-ai/dsh-sdk-client` version used by the compatibility probe. */
   sdkClient: string;
   /** `@deepseek-ai/dsh-sdk-jsonrpc-server` version installed into SDK runtime profiles. */
   sdkServer: string;
