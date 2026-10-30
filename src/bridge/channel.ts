@@ -255,6 +255,10 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         access: deps.accessManager,
         channel: commandChannel,
         ...(deps.sessionAliases ? { aliases: deps.sessionAliases } : {}),
+        // Lets a switch onto a session in another workspace move the chat with
+        // it (see SessionProjectionController.adoptWorkspace).
+        workspaces: deps.workspaces,
+        activeRuns: deps.activeRuns,
       })
     : undefined;
   sessionProjection?.rehydrateSessionMappings();

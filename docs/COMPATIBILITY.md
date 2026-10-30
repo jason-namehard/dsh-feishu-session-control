@@ -6,14 +6,18 @@
 
 | 组件 | 锁定版本 | 当前状态 |
 | --- | --- | --- |
-| DeepSeek Harness CLI | `0.1.2-rc.1` | 正式 `web` profile 正在运行 |
-| `@deepseek-ai/dsh-sdk-client` | `0.1.2-rc.1` | 精确 pin |
-| `@deepseek-ai/dsh-sdk-jsonrpc-server` | `0.1.2-rc.1` | 精确 pin |
-| `@deepseek-ai/dsh-acp` | `0.1.2-rc.1` | 精确 pin |
+| DeepSeek Harness CLI | `0.1.5-rc.3` | npm 默认 `latest`；隔离 Web 已启动，真实飞书联通待验 |
+| `@deepseek-ai/dsh-sdk-client` | `0.1.5-rc.3` | 精确 pin；隔离 SDK 探针通过 |
+| `@deepseek-ai/dsh-sdk-jsonrpc-server` | `0.1.5-rc.3` | 精确 pin；隔离 SDK 探针通过 |
+| `@deepseek-ai/dsh-acp` | `0.1.5-rc.3` | 精确 pin；隔离 ACP 探针通过 |
 | Node.js | `>=22.19.0` | `package.json#engines` |
 
-截至 2026-09-09，类型检查以及 session 投影、命令、原生审批镜像和进程内升级的定向回归已经通过。
-最终 `verifiedAt` 只在完成正式 profile 构建、热加载/重启和实体飞书验证后更新。
+截至 2026-09-24，隔离 Web 启动、SDK/ACP 探针、类型检查与定向回归已通过；隔离 SDK profile
+无可用审批渠道时审批结果为 `unavailable` 且拒绝提权，不代表真实飞书审批已通过。
+`verifiedAt` 保留此前的日期，仅在完成正式 profile 构建、热加载/重启和实体飞书验证后更新。
+本机 Windows 全量 `pnpm test` 为 818 通过、27 失败、4 跳过：失败包括 NTFS `0600` 断言、
+符号链接权限、POSIX 路径假设、临时目录占用，以及三个辅助发布脚本的 Vitest 导入异常。
+升级相关定向测试与兼容探针通过，但全量测试并未全绿，真实飞书消息/审批仍待人工验收。
 
 ## 推荐运行路径
 
@@ -29,7 +33,7 @@ DSH 插件模式优先使用进程内 `host` adapter：
 
 ## 版本锁定规则
 
-- DSH 仍是预发布版本，SDK client/server/ACP 使用精确版本，不用宽松范围；
+- DSH 仍是预发布版本，SDK client/server/ACP 使用精确版本，不用宽松范围；npm `next` 的 `0.1.7-rc.2` 尚未完成全插件适配，不随默认 `latest` 升级；
 - `package.json`、`pnpm-lock.yaml`、`src/config/dsh-compat.ts` 和 `dshWorkshop.compatibility` 必须一致；
 - 本包不直接依赖多份 DSH tool scheduler；桥接工具在受控边界注册；
 - 升级不得只改全局 DSH CLI，必须重新验证 host services、session 事件、审批和插件加载。

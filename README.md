@@ -11,7 +11,7 @@
 >（AGPL-3.0）的 **fork**。飞书长连接、命令路由、审批与工作区骨架来自上游，其著作权及
 > AGPL-3.0 义务继续适用。
 >
-> 本仓库由 **见川** 维护，新增了 DSH `0.1.2-rc.1` 进程内适配、跨工作空间会话别名、回收站与
+> 本仓库由 **见川** 维护，当前主要验证目标为 DSH `0.1.5-rc.3`（同时保留 `0.1.2-rc.1` 兼容声明），新增了跨工作空间会话别名、回收站与
 > 永久删除、Web 会话管理面板、飞书会话半/完整衔接，以及“只镜像 DSH 原生审批”的统一审批链。
 > 完整说明见 [`NOTICE.md`](NOTICE.md) 和 [`docs/PROJECT_IDENTITY.md`](docs/PROJECT_IDENTITY.md)。
 
@@ -21,7 +21,7 @@
 为 `dsh-lark-bot`，项目与仓库名称为 **DSH飞书Session控制 / dsh-feishu-session-control**。
 
 - 通过飞书 WebSocket 长连接收发消息，不需要公网 IP、域名或内网穿透。
-- 作为 DSH 插件在宿主进程中运行；支持 DSH `0.1.2-rc.1`。
+- 作为 DSH 插件在宿主进程中运行；当前主要支持 DSH `0.1.5-rc.3`，并保留 `0.1.2-rc.1` 兼容声明。
 - 不包含 Guardian，不接管已关闭的 DSH，也不会自动启动或自动重启 DSH。
 - Web 创建的 session 默认与飞书无关；只有飞书主动创建或显式 `/use` 的 session 才建立连接。
 
@@ -56,7 +56,7 @@ dsh --profile web
 ```
 
 Windows 示例中的本地包参数可写为
-`file:E:/Vibecoding-Mirasim/dsh-feishu-session-control`。`setup` 会把同一个整合包安装到桥接 profile 和
+`file:E:/DeepSeekHarness/dsh-plugins/dsh-feishu-session-control`。`setup` 会把同一个整合包安装到桥接 profile 和
 `web` profile。首次绑定可按终端二维码完成；已有应用也可通过 `DSH_LARK_APP_ID`、
 `DSH_LARK_APP_SECRET` 和 `DSH_LARK_TENANT` 配置。
 
@@ -81,6 +81,7 @@ Windows 示例中的本地包参数可写为
 | `/upgrade` | 管理员确认后在当前 DSH 进程内执行更新 |
 
 完整命令由 `/help` 返回；会话细节见 [`docs/SESSION_MANAGEMENT.md`](docs/SESSION_MANAGEMENT.md)。
+Web 插件启停和安全卸载见 [`docs/PLUGIN_MANAGER.md`](docs/PLUGIN_MANAGER.md)。
 
 ## 审批原则
 
@@ -122,3 +123,5 @@ Windows 未开启“开发人员模式”时，少数依赖目录符号链接的
 - 主许可证：[`LICENSE`](LICENSE)（GNU AGPL-3.0）
 - 上游与第三方说明：[`NOTICE.md`](NOTICE.md)
 - `dsh-sessions-manager` MIT 许可：[`THIRD_PARTY_LICENSES/dsh-sessions-manager-MIT.txt`](THIRD_PARTY_LICENSES/dsh-sessions-manager-MIT.txt)
+
+长期维护说明见 `MAINTENANCE.md`。

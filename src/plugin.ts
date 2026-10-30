@@ -115,6 +115,40 @@ export class LarkBridgeService extends Service {
 
   constructor(ctx: Context) {
     super(ctx, 'larkBridge');
+    this.ownCtx = ctx;
+    this.hostContextReady = new Promise((resolve) => {
+      this.resolveHostContext = resolve;
+    });
+  }
+
+  /** Context this row was mounted on. */
+  private readonly ownCtx: Context;
+  private hostContext: Context | undefined;
+  private readonly hostContextReady: Promise<Context>;
+  private resolveHostContext!: (ctx: Context) => void;
+
+  /**
+   * Receive the real host context through Cordis' dependency gate. DSH 0.1.5
+   * gives rows injected with `tools` the host service context, while the
+   * top-level bundle row is intentionally isolated.
+   */
+  setHostContext(ctx: Context): void {
+    if (this.hostContext === undefined) {
+      this.hostContext = ctx;
+      this.resolveHostContext(ctx);
+    }
+  }
+
+  private async hostCtx(timeoutMs = 10_000): Promise<Context> {
+    if (this.hostContext !== undefined) return this.hostContext;
+    await Promise.race([
+      this.hostContextReady,
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+    return this.hostContext ?? this.ownCtx;
   }
 
   status(): LarkBridgeStatus {
@@ -133,8 +167,9 @@ export class LarkBridgeService extends Service {
     };
   }
 
-  start(config: Config = {}, deps: PluginDeps = {}): Promise<BridgeEngine> {
+  async start(config: Config = {}, deps: PluginDeps = {}): Promise<BridgeEngine> {
     if (this.startPromise) return this.startPromise;
+    const hostContext = await this.hostCtx();
     const env = envForConfig(config, deps.env ?? process.env);
     this.startPromise = startBridgeEngine({
       env,
@@ -143,7 +178,7 @@ export class LarkBridgeService extends Service {
       // Running as a plugin, so hand the bridge this host's context: the
       // adapter drives dsh's agents directly rather than calling the web
       // server this same process is serving.
-      hostContext: this.ctx,
+      hostContext,
       ...(deps.createChannel ? { createChannel: deps.createChannel } : {}),
       ...(deps.adapter ? { adapter: deps.adapter } : {}),
     })
@@ -190,6 +225,12 @@ export class LarkBridgeService extends Service {
 
 export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) {
   const service = new LarkBridgeService(ctx);
+  if (typeof (ctx as unknown as { inject?: unknown }).inject !== 'function') {
+    service.setHostContext(ctx);
+  }
+  ctx.inject(['sessionPersistence', 'sessionQuery', 'sessionController'], (hostContext) => {
+    service.setHostContext(hostContext as Context);
+  });
   const detachTui = attachOptionalTuiSeams(ctx);
   let source = () => config;
   let appliedConfig: Config | undefined;
@@ -250,20 +291,36 @@ export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) 
   ctx.inject(['settings'], async (settingsContext) => {
     const base = await baseConfig;
     if (disposed) return;
-    const scope = settingsContext.settings.register(
-      DSH_LARK_SETTINGS_NAMESPACE,
-      Config,
-      { base, applies: 'live' },
-    );
-    source = () => scope.get();
-    reconcile();
-    const unwatch = scope.watch(() => { reconcile(); });
-    settingsContext.effect(() => () => {
-      unwatch();
-      if (disposed) return;
+    try {
+      // 0.2.0 removed settings.register: the loader registers this namespace
+      // from the exported Config and re-runs apply with the updated config on
+      // entry reload, so the bridge picks up edits without a live scope.
+      if (typeof settingsContext.settings.register !== 'function') {
+        throw new Error('settings.register is unavailable (0.2.0)');
+      }
+      const scope = settingsContext.settings.register(
+        DSH_LARK_SETTINGS_NAMESPACE,
+        Config,
+        { base, applies: 'live' },
+      );
+      source = () => scope.get();
+      reconcile();
+      const unwatch = scope.watch(() => { reconcile(); });
+      settingsContext.effect(() => () => {
+        unwatch();
+        if (disposed) return;
+        source = () => base;
+        reconcile();
+      });
+    } catch (error) {
+      // Fallback: keep serving the apply-time base config; settings edits
+      // reach the bridge through the entry reload that follows each write.
+      ctx.logger.warn(
+        `[dsh-lark-bot] live settings seam unavailable, serving apply-time config: ${error instanceof Error ? error.message : String(error)}`,
+      );
       source = () => base;
       reconcile();
-    });
+    }
   });
 
   const disabled = isDisabled(config);
@@ -272,13 +329,17 @@ export function apply(ctx: Context, config: Config = {}, deps: PluginDeps = {}) 
   );
   // Cordis uses the plugin's returned disposer to run cleanup when the fiber
   // unloads (profile stop / reload / `dsh plugin remove`).
-  return async (): Promise<void> => {
+  const cleanup = async (): Promise<void> => {
+    if (disposed) return;
     disposed = true;
     revision += 1;
     detachTui();
     await reconcileQueue;
     await service.stop();
   };
+  // Explicit ownership survives loader wrappers which consume apply's return.
+  ctx.effect(() => cleanup);
+  return cleanup;
 }
 
 async function hydrateSettingsBase(config: Config, baseEnv: NodeJS.ProcessEnv): Promise<Config> {

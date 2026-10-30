@@ -105,7 +105,11 @@ describe('session alias commands', () => {
     await f.controller.handleAliasCommand('sessions', '', commandContext({
       controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
     }));
-    expect(f.sendMarkdown).toHaveBeenCalledWith('chat-a', expect.stringContaining('0905-1'), undefined);
+    // `/sessions` answers immediately and posts the list behind that reply (the
+    // listing route can outlast the callback), so wait for the background send.
+    await vi.waitFor(() => {
+      expect(f.sendMarkdown).toHaveBeenCalledWith('chat-a', expect.stringContaining('0905-1'), undefined);
+    });
 
     const alias = await f.controller.createNewSession(commandContext({
       controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
@@ -287,6 +291,10 @@ describe('session alias commands', () => {
     await f.controller.handleAliasCommand('sessions', '', commandContext({
       controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
     }));
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    await vi.waitFor(() => {
+      expect(f.sendMarkdown.mock.calls.length).toBeGreaterThan(1);
+    });
 
     const listing = f.sendMarkdown.mock.calls.at(-1)?.[1] as unknown as string;
     expect(listing).toContain('← **当前对话**');
@@ -304,6 +312,10 @@ describe('session alias commands', () => {
     await f.controller.handleAliasCommand('sessions', '', commandContext({
       controller: f.controller, scope: 'chat-a', chatId: 'chat-a', chatMode: 'p2p', senderId: 'user-a',
     }));
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    await vi.waitFor(() => {
+      expect(f.sendMarkdown.mock.calls.length).toBeGreaterThan(1);
+    });
 
     const listing = f.sendMarkdown.mock.calls.at(-1)?.[1] as unknown as string;
     expect(listing).toContain('不在上面的列表里');

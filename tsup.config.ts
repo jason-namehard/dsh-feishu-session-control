@@ -16,6 +16,7 @@ export default defineConfig([
       'sdk-server': 'src/adapters/dsh/sdk-server.ts',
       skill: 'src/skill/index.ts',
       'session-manager': 'src/integrated/session-manager/index.ts',
+      'plugin-manager': 'src/plugin-manager/index.ts',
     },
     format: ['esm'],
     target: 'node22',

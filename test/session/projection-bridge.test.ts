@@ -29,9 +29,12 @@ class FakeSource implements SessionProjectionSource {
   events = new Map<string, DshSessionEvent[]>();
   sockets: FakeSocket[] = [];
   historyFailures = 0;
+  historyErrors = new Map<string, Error>();
 
   async listSessions(): Promise<DshSessionSummary[]> { return structuredClone(this.sessions); }
   async history(sessionId: string, options: { beforeSeq?: number; maxMessages?: number } = {}): Promise<DshHistoryPage> {
+    const sessionError = this.historyErrors.get(sessionId);
+    if (sessionError) throw sessionError;
     if (this.historyFailures > 0) {
       this.historyFailures -= 1;
       throw new Error('token revoked');
@@ -300,6 +303,45 @@ describe('SessionProjectionBridge', () => {
     await vi.waitFor(() => expect(store.ownerOf('s1')?.lastProjectedSeq).toBe(0));
     expect(sendCard).toHaveBeenCalledOnce();
     expect(source.sockets.length).toBeGreaterThanOrEqual(2);
+    await bridge.close();
+  });
+
+  it('quarantines one broken or missing history without reconnecting healthy sessions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-lark-projection-isolation-'));
+    const store = new SessionProjectionStore(join(root, 'projection.json'));
+    await store.load();
+    await Promise.all([
+      store.bindExclusive({
+        scope: 'chat-bad', workspaceCwd: '/repo', sessionId: 's-bad', chatId: 'chat-bad', initialSeq: -1,
+      }),
+      store.bindExclusive({
+        scope: 'chat-gone', workspaceCwd: '/repo', sessionId: 's-gone', chatId: 'chat-gone', initialSeq: -1,
+      }),
+      store.bindExclusive({
+        scope: 'chat-good', workspaceCwd: '/repo', sessionId: 's-good', chatId: 'chat-good', initialSeq: -1,
+      }),
+    ]);
+    const source = new FakeSource();
+    source.historyErrors.set(
+      's-bad',
+      new Error('dsh-session-format-v0-to-v1 refuses this format v0 Session: unexpected member "client"'),
+    );
+    source.historyErrors.set('s-gone', new Error('session "s-gone" not found'));
+    source.events.set('s-good', [user(0, 'u0', 'healthy')]);
+    const bridge = new SessionProjectionBridge({
+      source,
+      store,
+      channel: { sendMarkdown: vi.fn(), sendCard: vi.fn(async () => 'card') },
+      limits: { backfillMessages: 20, backfillBytes: 10_000, historyPageMessages: 100, streamUpdateMs: 1, reconnectMs: 1 },
+    });
+
+    await bridge.start();
+    await vi.waitFor(() => expect(store.ownerOf('s-good')?.lastProjectedSeq).toBe(0));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(source.sockets).toHaveLength(1);
+    expect(store.ownerOf('s-bad')?.lastProjectedSeq).toBe(-1);
+    expect(store.ownerOf('s-gone')).toBeUndefined();
     await bridge.close();
   });
 

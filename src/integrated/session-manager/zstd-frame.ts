@@ -136,3 +136,35 @@ export function readFrame0(buf) {
   const lines = text.split('\n').filter((l) => l.length > 0)
   return { obj: JSON.parse(lines[0]), lineCount: lines.length }
 }
+
+/**
+ * Decode one cold-stored session without registering it with DSH.
+ *
+ * Cold storage deliberately lives outside the persistence root, so the host
+ * session service cannot read it. Details and export are the only operations
+ * that need the full log; this helper keeps that expensive work on demand.
+ */
+export function readSessionLogFile(filePath) {
+  const buf = readFileSync(filePath)
+  const records = []
+  if (filePath.endsWith('.jsonl')) {
+    for (const line of buf.toString('utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue
+      records.push(JSON.parse(line))
+    }
+  } else {
+    const starts = findZstdFrameStarts(buf)
+    if (starts.length === 0) throw new Error('session log has no zstd frame')
+    for (let i = 0; i < starts.length; i += 1) {
+      const end = starts[i + 1] ?? buf.length
+      const text = zlib.zstdDecompressSync(buf.subarray(starts[i], end)).toString('utf8')
+      for (const line of text.split(/\r?\n/)) {
+        if (!line.trim()) continue
+        records.push(JSON.parse(line))
+      }
+    }
+  }
+  const header = records[0]
+  if (!header || header.type !== 'session') throw new Error('session log header is invalid')
+  return { meta: header, events: records.slice(1) }
+}

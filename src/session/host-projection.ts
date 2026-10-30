@@ -35,7 +35,9 @@ export interface HostProjectionEndpoints {
   model?: string;
 }
 
-function asDshEvent(event: HostSessionEvent): DshSessionEvent | undefined {
+function asDshEvent(value: unknown): DshSessionEvent | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const event = value as HostSessionEvent;
   if (typeof event.type !== 'string' || typeof event.seq !== 'number') return undefined;
   return {
     type: event.type,
@@ -79,10 +81,21 @@ async function postJson(url: string, body: unknown): Promise<Record<string, unkn
  * {@link HostProjectionEndpoints}.
  */
 export class HostSessionProjectionSource implements SessionProjectionSource {
+  /** Cached `/archived-sessions/sessions` payload, served stale while it refreshes. */
+  private itemsCache: { at: number; items: Array<Record<string, unknown>> } | undefined;
+  private itemsInflight: Promise<Array<Record<string, unknown>>> | undefined;
+
   constructor(
     private readonly services: HostServices,
     private readonly endpoints: HostProjectionEndpoints,
   ) {}
+
+  private sessionCore(): import('../session-core/index.js').SessionCore | undefined {
+    const candidate = this.services as HostServices & {
+      sessionCore?: () => import('../session-core/index.js').SessionCore | undefined;
+    };
+    return typeof candidate.sessionCore === 'function' ? candidate.sessionCore() : undefined;
+  }
 
   /**
    * The session list, read from this bridge's own `/archived-sessions/sessions`
@@ -101,6 +114,8 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
    * {@link HostSessionProjectionSource.subagentSessionIds}.
    */
   async listSessions(): Promise<DshSessionSummary[]> {
+    const core = this.sessionCore();
+    if (core !== undefined) return this.listFromCore(core);
     const [items, trashed, subagents] = await Promise.all([
       this.fetchSessionItems(),
       this.listTrashedSessionIds(),
@@ -138,6 +153,28 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  private async listFromCore(core: import('../session-core/index.js').SessionCore): Promise<DshSessionSummary[]> {
+    const items = await core.listActive();
+    const live = this.services.liveSessionIds();
+    return items
+      .filter((item) => item.origin !== 'subagent')
+      .map((item) => {
+        const title = typeof item.title === 'string' && item.title.trim() !== ''
+          ? item.title.trim()
+          : undefined;
+        const updatedAt = typeof item.updatedAt === 'number' ? item.updatedAt : 0;
+        return {
+          sessionId: item.sessionId,
+          updatedAt,
+          running: live.has(item.sessionId),
+          blank: title === undefined && updatedAt === 0,
+          ...(item.workspacePath === null ? {} : { cwd: item.workspacePath }),
+          ...(title === undefined ? {} : { title }),
+        } satisfies DshSessionSummary;
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
   /**
    * Ids dsh marks as subagent sessions.
    *
@@ -153,6 +190,14 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
    * list.
    */
   private async subagentSessionIds(): Promise<Set<string>> {
+    const core = this.sessionCore();
+    if (core !== undefined) {
+      return new Set(
+        (await core.listActive())
+          .filter((item) => item.origin === 'subagent')
+          .map((item) => item.sessionId),
+      );
+    }
     const headers = await this.services.sessionHeaders();
     const ids = new Set<string>();
     for (const header of headers) {
@@ -162,8 +207,35 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
   }
 
   private async fetchSessionItems(): Promise<Array<Record<string, unknown>>> {
+    // The route scans the whole history and is slow on a large one: measured
+    // 52.8s on 2026-09-13, against a 30s abort — so every `/sessions`, `/use`
+    // and alias auto-sync failed with "The operation was aborted due to
+    // timeout" while the route itself was healthy. Two changes keep the
+    // commands usable: a longer deadline, and a cache served stale-while-
+    // revalidate so only the first read pays the scan.
+    const ttlMs = 30 * 60_000;
+    const now = Date.now();
+    const cached = this.itemsCache;
+    if (cached !== undefined && now - cached.at < ttlMs) return cached.items;
+    this.itemsInflight ??= this.fetchSessionItemsFresh()
+      .then((items) => {
+        this.itemsCache = { at: Date.now(), items };
+        return items;
+      })
+      .finally(() => {
+        this.itemsInflight = undefined;
+      });
+    if (cached !== undefined) {
+      // Serve the previous list now and let the refresh land behind it.
+      void this.itemsInflight.catch(() => undefined);
+      return cached.items;
+    }
+    return this.itemsInflight;
+  }
+
+  private async fetchSessionItemsFresh(): Promise<Array<Record<string, unknown>>> {
     const response = await fetch(`${this.endpoints.baseUrl}/archived-sessions/sessions`, {
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(120_000),
     });
     const body = (await response.json()) as { items?: unknown };
     if (!response.ok || !Array.isArray(body.items)) {
@@ -176,8 +248,11 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
     sessionId: string,
     options: { beforeSeq?: number; maxMessages?: number } = {},
   ): Promise<DshHistoryPage> {
-    const page = await this.services.readSessionLog(sessionId, 0);
-    const all = (page.events ?? [])
+    const core = this.sessionCore();
+    const events = core !== undefined
+      ? await core.readEvents(sessionId, 0)
+      : (await this.services.readSessionLog(sessionId, 0)).events ?? [];
+    const all = events
       .map(asDshEvent)
       .filter((event): event is DshSessionEvent => event !== undefined);
     const eligible = options.beforeSeq === undefined
@@ -226,6 +301,8 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
    * event in the session log, and every surface reads it from there.
    */
   async renameSession(sessionId: string, title: string): Promise<string> {
+    const core = this.sessionCore();
+    if (core !== undefined) return core.rename(sessionId, title);
     return this.services.renameSession(sessionId, title, this.route());
   }
 
@@ -238,6 +315,12 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
   }
 
   async deleteSession(sessionId: string): Promise<SessionTrashResult> {
+    const core = this.sessionCore();
+    if (core !== undefined) {
+      const result = await core.delete(sessionId);
+      if ((result as { ok?: boolean }).ok !== true) throw new Error('session deletion failed');
+      return { ok: true, trashed: true };
+    }
     const body = await postJson(
       `${this.endpoints.baseUrl}/__chameleon/session/delete`,
       { sessionId },
@@ -249,6 +332,14 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
   }
 
   async purgeSession(sessionId: string): Promise<SessionPurgeResult> {
+    const core = this.sessionCore();
+    if (core !== undefined) {
+      const deleted = await core.delete(sessionId);
+      if ((deleted as { ok?: boolean }).ok !== true) throw new Error('session deletion failed');
+      const result = await core.purge(sessionId);
+      if ((result as { ok?: boolean }).ok !== true) throw new Error('permanent session deletion failed');
+      return { ok: true, purged: true };
+    }
     const body = await postJson(
       `${this.endpoints.baseUrl}/__chameleon/session/purge`,
       { sessionId },
@@ -270,6 +361,10 @@ export class HostSessionProjectionSource implements SessionProjectionSource {
    * marker, while propagating would break listing entirely.
    */
   private async listTrashedSessionIds(): Promise<Set<string>> {
+    const core = this.sessionCore();
+    if (core !== undefined) {
+      return new Set((await core.listTrash()).map((item) => String(item.sessionId)));
+    }
     try {
       const response = await fetch(`${this.endpoints.baseUrl}/archived-sessions/trash/list`, {
         signal: AbortSignal.timeout(30_000),

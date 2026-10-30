@@ -2,8 +2,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client';
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client';
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client';
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import type { RemoteSettingsScope, ScopeSnapshot } from './settings-scope-compat.js';
 
 export const SETTINGS_NAMESPACE = 'dsh-lark-bot';
 
@@ -29,9 +28,9 @@ export const SETTINGS_FIELDS: readonly SettingsField[] = [
   { key: 'tenant', label: '服务区域 / Region', help: '中国大陆选飞书，海外工作区选 Lark。', timing: '保存后自动重连生效' },
   { key: 'appId', label: '应用 ID / App ID', help: '飞书开放平台中以 cli_ 开头的应用 ID。', timing: '保存后自动重连生效' },
   { key: 'appSecret', label: '应用密钥 / App Secret', help: '只写不回显；留空不会覆盖已保存密钥。', timing: '保存后自动重连生效', secret: true },
-  { key: 'workspace', label: '默认项目文件夹 / Workspace', help: '新会话默认打开的本机项目目录，例如 /Users/me/project。', timing: '新会话生效（保存后自动重连）' },
+  { key: 'workspace', label: '默认项目文件夹 / Workspace', help: '新会话默认打开的本机项目目录。', timing: '新会话生效（保存后自动重连）' },
   { key: 'model', label: '默认模型 / Model', help: '新任务使用的 provider/model 路由。', timing: '保存后热更新，下一任务生效' },
-  { key: 'scopeConcurrency', label: '并行任务数 / Parallel tasks', help: '每个飞书会话同时运行的任务数，建议 1–4。', timing: '保存后立即生效于新任务' },
+  { key: 'scopeConcurrency', label: '并行任务数 / Parallel tasks', help: '每个飞书会话同时运行的任务数，建议 1-4。', timing: '保存后立即生效于新任务' },
   { key: 'adapter', label: '运行方式 / Runtime mode', help: '默认使用当前 dsh Web；只有需要独立 SDK runtime 时才选择 sdk。', timing: '保存后自动重连生效' },
   { key: 'notificationDefault', label: '默认提醒 / Notifications', help: '会话未单独设置时，是否主动提醒完成、失败和审批。', timing: '保存后立即生效于新提醒' },
 ] as const;
@@ -116,8 +115,8 @@ export function canSaveSnapshot(snapshot: Pick<BrowserDiagnosticSnapshot, 'statu
 }
 
 export async function saveSettingsDraft(
-  scope: Pick<SettingsScope<BrowserSettings>, 'set' | 'unset'>,
-  snapshot: Pick<ReturnType<SettingsScope<BrowserSettings>['getSnapshot']>, 'value' | 'user'>,
+  scope: Pick<RemoteSettingsScope<BrowserSettings>, 'set' | 'unset'>,
+  snapshot: Pick<ScopeSnapshot<BrowserSettings>, 'value' | 'user'>,
   draft: SettingsDraft,
 ): Promise<void> {
   const normalized = normalizeSettingsDraft(draft);
@@ -136,165 +135,8 @@ export async function saveSettingsDraft(
   }
 }
 
-function SettingsCard({ scope }: { scope: SettingsScope<BrowserSettings> }) {
-  const snapshot = useSyncExternalStore(scope.subscribe, scope.getSnapshot);
-  const [draft, setDraft] = useState<SettingsDraft>(() => draftFrom(snapshot.value));
-  const [message, setMessage] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [diagnostic, setDiagnostic] = useState('');
-
-  useEffect(() => {
-    setDraft(draftFrom(snapshot.value));
-  }, [snapshot.value]);
-
-  if (snapshot.status !== 'ready') return null;
-
-  const update = (key: SettingKey, value: string) => {
-    setDraft((current) => ({ ...current, [key]: value }));
-  };
-  const save = async () => {
-    setSaving(true);
-    setMessage('');
-    try {
-      await saveSettingsDraft(scope, snapshot, draft);
-      setDraft((current) => ({ ...current, appSecret: '' }));
-      setMessage('✅ 已保存。连接类设置会自动重连，其余设置用于下一任务。');
-    } catch (error) {
-      setMessage(`⚠️ ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <section style={styles.card} aria-label="dsh-lark-bot settings">
-      <header style={styles.header}>
-        <div>
-          <strong style={styles.title}>飞书 / Lark 机器人</strong>
-          <div style={styles.subtitle}>在运行 DSH 的本机 Web 中可直接保存；手机或局域网打开时设置页按安全策略为只读。</div>
-        </div>
-        <span style={styles.badge}>dsh-lark-bot</span>
-      </header>
-
-      <div style={styles.grid}>
-        <SelectField field={SETTINGS_FIELDS[0]!} value={draft.tenant ?? 'feishu'} options={[['feishu', '飞书（中国大陆）'], ['lark', 'Lark（海外）']]} onChange={update} />
-        <TextField field={SETTINGS_FIELDS[1]!} value={draft.appId ?? ''} placeholder="cli_xxxxxxxxx" onChange={update} />
-        <TextField field={SETTINGS_FIELDS[2]!} value={draft.appSecret ?? ''} placeholder="填写新密钥（已保存的不会显示）" onChange={update} />
-        <TextField field={SETTINGS_FIELDS[3]!} value={draft.workspace ?? ''} placeholder="/Users/me/project" onChange={update} />
-        <TextField field={SETTINGS_FIELDS[4]!} value={draft.model ?? ''} placeholder="provider/model" onChange={update} />
-        <TextField field={SETTINGS_FIELDS[5]!} value={draft.scopeConcurrency ?? ''} placeholder="2" inputMode="numeric" onChange={update} />
-        <SelectField field={SETTINGS_FIELDS[6]!} value={draft.adapter ?? 'web'} options={[['web', 'dsh Web（推荐）'], ['sdk', 'SDK'], ['acp', 'ACP'], ['headless', '命令行兼容']]} onChange={update} />
-        <SelectField field={SETTINGS_FIELDS[7]!} value={draft.notificationDefault ?? 'off'} options={[['off', '关闭（默认）'], ['completed', '完成与失败'], ['all', '完成、失败和审批']]} onChange={update} />
-      </div>
-
-      <div style={styles.actions}>
-        <button type="button" style={styles.primaryButton} disabled={saving || !canSaveSnapshot(snapshot)} onClick={() => { void save(); }}>
-          {saving ? '保存中…' : '保存设置'}
-        </button>
-        {!snapshot.writable && <span style={styles.muted}>当前连接为只读；请在运行 DSH 的电脑上打开 http://127.0.0.1:3080 修改。</span>}
-        {message && <span role="status" style={styles.message}>{message}</span>}
-      </div>
-
-      <aside style={styles.diagnostics}>
-        <strong>快速诊断 / Quick diagnosis</strong>
-        <p style={styles.help}>先在本页直接检查常见配置问题；需要运行态详情时，再用飞书命令深入诊断。两种方式都不会暴露密钥。</p>
-        <button type="button" style={styles.secondaryButton} onClick={() => { setDiagnostic(buildWebDiagnostic(snapshot)); }}>
-          立即检查页面配置 / Diagnose now
-        </button>
-        {diagnostic && <pre role="status" style={styles.diagnosticResult}>{diagnostic}</pre>}
-        <div style={styles.actions}>
-          {DIAGNOSTIC_SHORTCUTS.map((shortcut) => (
-            <button key={shortcut.command} type="button" style={styles.secondaryButton} onClick={() => { void copyDiagnostic(shortcut.command, setMessage); }}>
-              复制 {shortcut.command} · {shortcut.label}
-            </button>
-          ))}
-        </div>
-      </aside>
-    </section>
-  );
-}
-
-function TextField(props: {
-  field: SettingsField;
-  value: string;
-  placeholder: string;
-  inputMode?: 'numeric';
-  onChange(key: SettingKey, value: string): void;
-}) {
-  return (
-    <label style={styles.field}>
-      <span style={styles.label}>{props.field.label}</span>
-      <input
-        style={styles.input}
-        type={props.field.secret ? 'password' : 'text'}
-        inputMode={props.inputMode}
-        autoComplete={props.field.secret ? 'new-password' : 'off'}
-        value={props.value}
-        placeholder={props.placeholder}
-        onChange={(event) => { props.onChange(props.field.key, event.currentTarget.value); }}
-      />
-      <span style={styles.help}>{props.field.help}</span>
-      <span style={styles.timing}>⏱ {props.field.timing}</span>
-    </label>
-  );
-}
-
-function SelectField(props: {
-  field: SettingsField;
-  value: string;
-  options: ReadonlyArray<readonly [string, string]>;
-  onChange(key: SettingKey, value: string): void;
-}) {
-  return (
-    <label style={styles.field}>
-      <span style={styles.label}>{props.field.label}</span>
-      <select style={styles.input} value={props.value} onChange={(event) => { props.onChange(props.field.key, event.currentTarget.value); }}>
-        {props.options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-      </select>
-      <span style={styles.help}>{props.field.help}</span>
-      <span style={styles.timing}>⏱ {props.field.timing}</span>
-    </label>
-  );
-}
-
-async function copyDiagnostic(command: string, setMessage: (message: string) => void): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(command);
-    setMessage(`✅ 已复制 ${command}，请粘贴到飞书机器人会话。`);
-  } catch {
-    setMessage(`请在飞书机器人会话发送：${command}`);
-  }
-}
-
-const styles = {
-  card: { border: '1px solid var(--border, #dfe3e8)', borderRadius: 16, padding: 20, background: 'var(--surface, #fff)', display: 'grid', gap: 20 },
-  header: { display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start' },
-  title: { fontSize: 18 },
-  subtitle: { color: 'var(--muted-foreground, #667085)', marginTop: 4, fontSize: 13 },
-  badge: { borderRadius: 999, padding: '4px 10px', background: '#e8f3ff', color: '#1456a0', fontSize: 12 },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 },
-  field: { display: 'grid', gap: 6 },
-  label: { fontWeight: 600, fontSize: 13 },
-  input: { width: '100%', boxSizing: 'border-box' as const, border: '1px solid var(--border, #cfd6dd)', borderRadius: 8, padding: '9px 10px', background: 'var(--background, #fff)', color: 'inherit' },
-  help: { color: 'var(--muted-foreground, #667085)', fontSize: 12, margin: 0 },
-  timing: { color: '#2667b5', fontSize: 12 },
-  actions: { display: 'flex', flexWrap: 'wrap' as const, gap: 10, alignItems: 'center' },
-  primaryButton: { border: 0, borderRadius: 8, padding: '9px 16px', background: '#1456a0', color: '#fff', cursor: 'pointer' },
-  secondaryButton: { border: '1px solid var(--border, #cfd6dd)', borderRadius: 8, padding: '8px 12px', background: 'transparent', color: 'inherit', cursor: 'pointer', textAlign: 'left' as const },
-  diagnostics: { borderRadius: 12, padding: 14, background: 'var(--muted, #f6f8fa)', display: 'grid', gap: 8 },
-  diagnosticResult: { whiteSpace: 'pre-wrap' as const, margin: 0, fontFamily: 'inherit', fontSize: 12 },
-  muted: { color: 'var(--muted-foreground, #667085)', fontSize: 12 },
-  message: { fontSize: 13 },
-} as const;
-
-/** dsh browser-half entry: register one card under the matching Host namespace. */
-export const inject = ['slots', 'settingsScope'];
-
-export function apply(ctx: ClientContext): void {
-  const scope = ctx.settingsScope.bind<BrowserSettings>({ namespace: SETTINGS_NAMESPACE });
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item',
-    key: SETTINGS_NAMESPACE,
-    inject: () => ({ scope }),
-  }, SettingsCard));
+/** dsh browser-half entry：0.2.0 起飞书设置卡按用户决定退役（连接开关移至系统托盘）。
+ *  字段/草稿/诊断工具函数与其测试保留；remote.settings 兼容层见 settings-scope-compat.ts。 */
+export function apply(_ctx: ClientContext): void {
+  /* retired: no settings-page mount */
 }

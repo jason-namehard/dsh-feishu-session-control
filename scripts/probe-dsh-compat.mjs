@@ -133,6 +133,7 @@ async function startCompatServer() {
         serializedInput.includes('compat-approved');
       const hasApprovalReject = serializedInput.includes('compat-reject-bash') &&
         approvals.some(isRejectedApproval);
+      const unavailableApproval = serializedInput.includes('no approval channel is available');
       const hasNotifyResult = serializedInput.includes('Message sent to compat-chat');
       const events = hasNativeImage
         ? textResponse('acp-image-ok')
@@ -152,8 +153,10 @@ async function startCompatServer() {
               ]
         : isResume
         ? textResponse(hasPersistedFirstTurn ? 'resume-ok' : 'resume-history-missing')
+        : isApprovalReject && unavailableApproval
+          ? textResponse('approval-unavailable')
         : isApprovalReject && hasApprovalReject
-          ? textResponse('')
+          ? textResponse('approval-rejected')
           : isApprovalReject && hasRejectPlan
             ? [
               JSON.stringify({ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compat-reject-bash', type: 'function', function: { name: shellToolName, arguments: JSON.stringify({ command: approvalRejectedCommand, description: 'Verify rejection recovery', sandbox_permissions: 'danger-full-access', justification: 'Verify that DSH native approval rejection stops this command.' }) } }] }, index: 0, finish_reason: null }] }),
@@ -513,6 +516,7 @@ async function main() {
       throw new Error(`ACP plan callback count mismatch: ${compatServer.plans.length}`);
     }
     const sdkPlanBaseline = compatServer.plans.length;
+    const sdkApprovalBaseline = compatServer.approvals.length;
     // 5. Run a complete SDK tool turn, then resume the same durable session.
     const { DeepSeekHarness } = await import('@deepseek-ai/dsh-sdk-client');
     const createHarness = () => new DeepSeekHarness({
@@ -577,13 +581,18 @@ async function main() {
     const harness = createHarness();
     try {
       await initializeHarness(harness);
-      const reopened = await harness.run('Continue the same session.', { sessionId: 'compat-session' });
-      const reopenError = reopened.events.find((event) => event.type === 'turn/end')
-        ?.data?.reason?.error?.message;
-      if (!String(reopenError).match(/persisted log.*id collision/i)) {
+      let reopenError;
+      try {
+        const reopened = await harness.run('Continue the same session.', { sessionId: 'compat-session' });
+        reopenError = reopened.events.find((event) => event.type === 'turn/end')
+          ?.data?.reason?.error?.message;
+      } catch (error) {
+        reopenError = error instanceof Error ? error.message : String(error);
+      }
+      if (!/persisted log.*id collision/i.test(String(reopenError)) &&
+        !/^session\s+[\x22\x27\x60][-A-Za-z0-9_]+[\x22\x27\x60]\s+already exists$/i.test(String(reopenError))) {
         throw new Error(`unexpected close/reopen result: ${JSON.stringify({
-          finalResponse: reopened.finalResponse,
-          events: reopened.events,
+          error: reopenError,
         })}`);
       }
       console.log('[probe] sdk close/reopen collision is explicit; bridge fresh-session self-heal remains required');
@@ -598,30 +607,36 @@ async function main() {
         'Verify rejected approval recovery.',
         { sessionId: 'compat-approval-reject-session' },
       );
-      if (
-        rejected.finalResponse !== '' ||
-        !rejected.events.some((event) => (
+      const nativeRejection = rejected.finalResponse === 'approval-rejected' &&
+        rejected.events.some((event) => (
           event.type === 'approval/decided' && event.data?.outcome === 'rejected'
-        ))
-      ) {
-        throw new Error(`native approval rejection did not terminate cleanly: ${JSON.stringify(rejected)}`);
+        ));
+      const unavailableRejection = rejected.finalResponse === 'approval-unavailable' &&
+        rejected.events.some((event) => event.type === 'approval/decided' && event.data?.outcome === 'unavailable');
+      if (!nativeRejection && !unavailableRejection) {
+        throw new Error(`native approval rejection did not terminate cleanly: final=${JSON.stringify(rejected.finalResponse)} decisions=${JSON.stringify(rejected.events.filter((event) => event.type === 'approval/decided').map((event) => event.data?.outcome))} approvals=${compatServer.approvals.length} baseline=${sdkApprovalBaseline}`);
       }
+      const sdkApprovals = compatServer.approvals.slice(sdkApprovalBaseline);
       if (
-        compatServer.plans.length !== sdkPlanBaseline + 1 || compatServer.approvals.length !== 1 ||
+        compatServer.plans.length !== sdkPlanBaseline + 1 ||
+        (nativeRejection ? sdkApprovals.length !== 1 : sdkApprovals.length > 1) ||
+        sdkApprovals.some((approval) => !isRejectedApproval(approval)) ||
         compatServer.notifications.length !== 1
       ) {
         throw new Error(
           `approval rejection recovery counts mismatch: plans=${compatServer.plans.length}, approvals=${compatServer.approvals.length}, notifications=${compatServer.notifications.length}`,
         );
       }
-      const approval = compatServer.approvals[0];
-      if (
-        approval.toolName !== shellToolName || approval.callId !== 'compat-reject-bash' ||
-        !approval.reason
-      ) {
-        throw new Error(`incomplete native approval payload: ${JSON.stringify(approval)}`);
+      if (sdkApprovals.length === 1) {
+        const approval = sdkApprovals[0];
+        if (
+          approval.toolName !== shellToolName || approval.callId !== 'compat-reject-bash' ||
+          !approval.reason
+        ) {
+          throw new Error(`incomplete native approval payload: ${JSON.stringify(approval)}`);
+        }
       }
-      console.log('[probe] sdk task/notify/ask/explicit-plan/native-approval-stop/resume ok against local OpenAI-compatible fixture');
+      console.log(`[probe] sdk task/notify/ask/explicit-plan/${nativeRejection ? 'native-approval-stop' : 'approval-unavailable-fail-closed'}/resume ok against local OpenAI-compatible fixture`);
     } finally {
       await harness.close();
     }

@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "io.github.plutokeating.dsh-lark-bot",
   "name": "dsh-lark-bot",
-  "version": "0.19.17",
+  "version": "0.19.18",
   "facets": {
     "host": {
       "entry": "dist/plugin.js",
@@ -30,7 +30,7 @@
     "repository": "https://github.com/jason-namehard/dsh-feishu-session-control"
   },
   "artifact": {
-    "digest": "sha256:44d3f304ffa701ad439acd69690611a7ffcaa070e8a236b1e2f95b8ba3d2fa07",
+    "digest": "sha256:406df6a8d5b5a5f91b8aa177bb0dcb53b644cd08fa706ea2ff942ce9836568ee",
     "algorithm": "sha256",
     "path": "dist/plugin.js"
   },

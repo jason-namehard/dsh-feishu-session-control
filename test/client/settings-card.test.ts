@@ -46,21 +46,13 @@ describe('dsh Web settings card', () => {
     })).toMatch(/App ID.*远端只读/s);
   });
 
-  it('mounts through the official settings scope and keyed plugin slot', () => {
-    const scope = { getSnapshot: vi.fn(), subscribe: vi.fn(), set: vi.fn(), unset: vi.fn() };
-    const bind = vi.fn(() => scope);
-    const register = vi.fn(() => undefined);
+  it('retires the settings-page mount without registering any slot', () => {
+    const get = vi.fn(() => undefined);
     const inject = vi.fn((_name: string, install: () => unknown) => install());
-    apply({
-      settingsScope: { bind },
-      slots: { inject, register },
-    } as never);
-    expect(bind).toHaveBeenCalledWith({ namespace: 'dsh-lark-bot' });
-    expect(inject).toHaveBeenCalledWith('settings.plugin.item', expect.any(Function));
-    expect(register).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'settings.plugin.item',
-      key: 'dsh-lark-bot',
-    }), expect.any(Function));
+    const register = vi.fn(() => undefined);
+    apply({ get, slots: { inject, register } } as never);
+    expect(inject).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 
   it('keeps a redacted secret empty, rejects remote writes, and sends only explicit mutations', async () => {

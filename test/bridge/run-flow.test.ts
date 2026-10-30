@@ -1014,7 +1014,10 @@ describe('runAgentBatch', () => {
     expect(observedPrompt).toContain('what did I just say?');
   });
 
-  it('falls back to a fresh session when a native resume fails', async () => {
+  it.each([
+    ['persisted-log mismatch', 'session \x22session-1\x22 already has a persisted log on disk that does not match this live session (id collision)', false],
+    ['SDK session collision', 'session \x22session-1\x22 already exists', true],
+  ])('falls back to a fresh session when a native resume fails (%s)', async (_label, failure, asEvent) => {
     const calls: Array<{ prompt: string; sessionId: string | undefined }> = [];
     let first = true;
     const adapter: AgentAdapter = {
@@ -1040,9 +1043,11 @@ describe('runAgentBatch', () => {
                 cwd: '/tmp/project',
                 model: undefined,
               };
-              throw new Error(
-                'session "session-1" already has a persisted log on disk that does not match this live session (id collision)',
-              );
+              if (asEvent) {
+                yield { type: 'error' as const, message: failure, terminationReason: 'failed' as const };
+                return;
+              }
+              throw new Error(failure);
             })(),
             stop: vi.fn().mockResolvedValue(undefined),
             waitForExit: async () => true,

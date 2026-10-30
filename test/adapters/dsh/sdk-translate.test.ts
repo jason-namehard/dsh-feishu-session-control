@@ -105,6 +105,26 @@ describe('translateSessionEvent', () => {
     expect(turnError).toEqual([{ type: 'error', message: 'boom', terminationReason: 'failed' }]);
   });
 
+  it('surfaces rc.2 nested assistant text as the final reply', () => {
+    const events = translateSessionEvent(
+      {
+        type: 'assistant/message',
+        data: {
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'reply from dsh' }],
+          },
+          usage: { inputTokens: 10, outputTokens: 4 },
+        },
+      },
+      { emitted: new Set<string>() },
+    );
+    expect(events).toEqual([
+      { type: 'final_text', content: 'reply from dsh' },
+      { type: 'usage', inputTokens: 10, outputTokens: 4 },
+    ]);
+  });
+
   it('does not misclassify rc.8 max-token turn boundaries as fatal session errors', () => {
     const events = translateSessionEvent(
       { type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } },

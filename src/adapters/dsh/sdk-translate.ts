@@ -90,7 +90,13 @@ function translateToolResult(data: unknown): AgentEvent[] {
 }
 
 function translateAssistantMessage(data: unknown): AgentEvent[] {
-  if (!isRecord(data) || !isRecord(data.usage)) return [];
+  if (!isRecord(data)) return [];
+  const message = isRecord(data.message) ? data.message : undefined;
+  const content = textOfBlocks(message?.content) || textOfBlocks(data.content);
+  const events: AgentEvent[] = content
+    ? [{ type: 'final_text', content }]
+    : [];
+  if (!isRecord(data.usage)) return events;
   const usage = data.usage;
   const inputTokens =
     typeof usage.inputTokens === 'number' ? usage.inputTokens : undefined;
@@ -105,8 +111,8 @@ function translateAssistantMessage(data: unknown): AgentEvent[] {
     outputTokens === undefined &&
     cacheReadTokens === undefined &&
     cacheWriteTokens === undefined
-  ) return [];
-  return [
+  ) return events;
+  events.push(
     {
       type: 'usage',
       ...(inputTokens === undefined ? {} : { inputTokens }),
@@ -114,7 +120,8 @@ function translateAssistantMessage(data: unknown): AgentEvent[] {
       ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
       ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
     },
-  ];
+  );
+  return events;
 }
 
 function translateTurnEnd(data: unknown): AgentEvent[] {

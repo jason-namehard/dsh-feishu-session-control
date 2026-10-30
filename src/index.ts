@@ -1,5 +1,9 @@
 export const packageName = 'dsh-lark-bot';
 
+// 0.2.0: the loader registers the settings namespace from the Config export;
+// without this the native settings page has no dsh-lark-bot card.
+export { Config } from './plugin.js';
+
 /**
  * Bare-specifier anchor row for the browser half.
  *

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { DSH_COMPATIBILITY } from '../src/config/dsh-compat.js';
 
 describe('dsh bundle manifest', () => {
   it('declares dsh.bundle.patch, runtime exports and cordis peer', async () => {
@@ -24,7 +25,7 @@ describe('dsh bundle manifest', () => {
     // Tool plugins register raw JSON-Schema definitions against the host
     // registry; a direct dsh-tools dependency can create a second Symbol realm.
     expect(pkg.dependencies?.['@deepseek-ai/dsh-tools']).toBeUndefined();
-    expect(pkg.dependencies?.['@deepseek-ai/dsh-skill']).toBe('0.1.2-rc.1');
+    expect(pkg.dependencies?.['@deepseek-ai/dsh-skill']).toBe(DSH_COMPATIBILITY.harness);
   });
 
   it('ships a bundle patch whose row references the plugin entry', async () => {

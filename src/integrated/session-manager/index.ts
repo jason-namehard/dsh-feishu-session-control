@@ -8,13 +8,15 @@
 // (workspaceRegistry + storageDomain), folds titles/dates/workspace tags from
 // session persistence, physically removes a session's log file on delete, and
 // relocates a conversation (session) between workspaces on move.
-import { mkdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { mkdir, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { homedir } from 'node:os'
-import { rewriteFrame0Cwd } from './zstd-frame.js'
+import { readSessionLogFile, rewriteFrame0Cwd } from './zstd-frame.js'
 import { renderSessionMarkdown } from './markdown.js'
 import { createStarIndex } from './star-index.js'
+import { ColdSessionStore } from './cold-storage.js'
+import { sessionHeaderList, sessionIdOf, unwrapSessionHeader } from '../../session/session-metadata.js'
+import { registerSessionCore, type SessionCore } from '../../session-core/index.js'
 
 export const name = 'dsh-sessions-manager'
 // Services this host half cannot work without. Declaring them as the
@@ -30,14 +32,14 @@ export const inject = [
   'sessionPersistence',
   'sessionQuery',
   'storageDomain',
+  'sessionController',
 ]
 
 const MAX_TITLE = 80
 // Recycle bin (回收站): normal deletes land here instead of being erased.
-const TRASH_DIR = process.env.DSH_SESSIONS_MANAGER_TRASH_DIR || join(homedir(), '.dsh', 'sessions-manager-trash')
-const TRASH_INDEX = join(TRASH_DIR, 'index.json')
-const TRASH_SCHEMA_VERSION = 2
-const DEFAULT_TRASH_SETTINGS = Object.freeze({ retentionDays: 0 })
+const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
+const COLD_STORE = new ColdSessionStore(DSH_HOME)
+const LIGHT_ROWS_TTL_MS = 30 * 60_000
 // -- per-session detail aggregation (v2.0: 取 Zephyr-vibe buildDetails 精华) --
 // 识别“搜索/抓取”类工具，用来收集 fetch 记录。
 const FETCH_TOOL_RE = /search|fetch|download|browse/i
@@ -127,73 +129,217 @@ function foldTitle(events) {
   return found || firstUser || null
 }
 
+/**
+ * Wait until every service this entry needs is published, then mount.
+ *
+ * dsh 0.1.5 publishes `sessionPersistence` / `sessionQuery` / `storageDomain`
+ * asynchronously — a few hundred ms AFTER the plugin tree reports ready. The
+ * previous synchronous read ran at apply time, found nothing, and silently
+ * returned, so the whole session manager stayed unmounted on 0.1.5 while
+ * `plugin` (which reads lazily) kept working. Retry instead of giving up once.
+ */
+const REQUIRED_SERVICES = ['webServer', 'workspaceRegistry', 'sessionPersistence', 'sessionQuery', 'storageDomain', 'sessionController']
+
+function contextService(ctx: { get?: (n: string) => unknown }, name: string): unknown {
+  const direct = (ctx as unknown as Record<string, unknown>)[name]
+  if (direct !== undefined) return direct
+  try { return ctx.get?.(name) } catch { return undefined }
+}
+
+function readServices(ctx: { get?: (n: string) => unknown }): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {}
+  for (const name of REQUIRED_SERVICES) {
+    const value = contextService(ctx, name)
+    if (value === undefined || value === null) return undefined
+    out[name] = value
+  }
+  return out
+}
+
 export function apply(ctx) {
-  let webServer, w, sp, sq, storageDomain
-  try {
-    webServer = ctx.get('webServer')
-    w = ctx.get('workspaceRegistry')
-    sp = ctx.get('sessionPersistence')
-    sq = ctx.get('sessionQuery')
-    storageDomain = ctx.get('storageDomain')
-  } catch (e) {
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(REQUIRED_SERVICES, (serviceContext) => {
+      const services = readServices(serviceContext as { get?: (n: string) => unknown })
+      if (services) mount(serviceContext, services)
+    })
     return
   }
-  if (!webServer || !w || !sp || !sq || !storageDomain) return
+  const services = readServices(ctx as { get?: (n: string) => unknown })
+  if (services) mount(ctx, services)
+}
+
+function mount(ctx, services: Record<string, unknown>) {
+  const webServer = services.webServer
+  const w = services.workspaceRegistry
+  const sp = services.sessionPersistence
+  const sq = services.sessionQuery
+  const storageDomain = services.storageDomain
+  const sessionController = services.sessionController
   const dom = () => storageDomain.get('workspace')
   const authorityTitleCache = new Map()
   let authorityTitlesLoaded = false
+  let lightRowsCache = null
+  let lightRowsInflight = null
+  const invalidateLightRows = () => { lightRowsCache = null }
 
-  async function archivedState() {
-    const d = dom()
-    if (!d) throw new Error('workspace domain is not open')
-    return d.global.get()
+  async function lightSessionRows() {
+    const now = Date.now()
+    if (lightRowsCache && now - lightRowsCache.at < LIGHT_ROWS_TTL_MS) return lightRowsCache.rows
+    if (lightRowsInflight) return lightRowsInflight
+    lightRowsInflight = (async () => {
+      let rows = []
+      if (sessionController && typeof sessionController.list === 'function') {
+        const result = await sessionController.list()
+        rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
+      } else if (sq && typeof sq.listSessions === 'function') {
+        const records = await sq.listSessions()
+        rows = Array.isArray(records) ? records : []
+      }
+      lightRowsCache = { at: Date.now(), rows }
+      return rows
+    })().finally(() => { lightRowsInflight = null })
+    return lightRowsInflight
   }
 
-  async function writeArchived(nextIds) {
-    const d = dom()
-    if (!d) throw new Error('workspace domain is not open')
-    const cur = d.global.get()
-    const next = Object.assign({}, cur, { archivedSessionIds: nextIds })
-    await d.global.set(next)
-    // Keep the registry's in-memory cache in sync so the live sidebar refreshes.
-    if (w && 'state' in w) { try { w.state = next } catch (e) { /* best-effort */ } }
-    return next
+  async function persistedHeaders() {
+    try { return sessionHeaderList(await sp.list()) } catch (e) { return [] }
   }
 
-  let archiveMutation = Promise.resolve()
-  function mutateArchived(mutator) {
-    const operation = archiveMutation.then(async () => {
-      const state = await archivedState()
-      const list = (state.archivedSessionIds || []).map(String)
-      const result = await mutator(list)
-      if (result.next) await writeArchived(result.next)
-      return result.value
-    })
-    archiveMutation = operation.catch(() => {})
-    return operation
+  async function persistedHeader(sessionId) {
+    try {
+      const row = (await lightSessionRows()).find((item) => String(item.sessionId ?? item.header?.id) === String(sessionId))
+      if (row) {
+        const header = row.header && typeof row.header === 'object' ? row.header : row
+        const projectedTitle = row.projections?.values?.title
+        return Object.assign({}, header, {
+          id: String(row.sessionId ?? header.id),
+          ...(typeof row.cwd === 'string' ? { cwd: row.cwd } : {}),
+          ...(typeof projectedTitle === 'string' && projectedTitle.trim() ? { title: projectedTitle.trim() } : {}),
+          ...(typeof row.createdAt === 'number' ? { createdAt: row.createdAt } : {}),
+          ...(typeof row.updatedAt === 'number' ? { updatedAt: row.updatedAt } : {}),
+          ...(typeof row.parentSessionId === 'string' ? { parentSession: row.parentSessionId } : {}),
+          ...(typeof row.origin === 'string' ? { origin: row.origin } : {}),
+        })
+      }
+    } catch (e) { /* fall back to the persistence snapshot */ }
+    return (await persistedHeaders()).find((header) => sessionIdOf(header) === String(sessionId)) || null
+  }
+
+  async function readStoredSession(sessionId) {
+    if (sp && typeof sp.open === 'function') {
+      const handle = await sp.open(sessionId, 'read')
+      try {
+        const result = await handle.read(0)
+        return {
+          meta: result?.meta || handle.header || null,
+          events: Array.isArray(result?.events) ? result.events : [],
+        }
+      } finally {
+        await handle.close()
+      }
+    }
+    if (sp && typeof sp.readFrom === 'function') return sp.readFrom(sessionId, 0)
+    throw new Error('DSH session persistence does not expose a readable handle')
+  }
+
+  function headerField(header, key) {
+    const value = unwrapSessionHeader(header)?.[key]
+    return value === undefined || value === null ? undefined : value
+  }
+
+  function headerWorkspace(header) {
+    const cwd = headerField(header, 'cwd')
+    if (typeof cwd === 'string' && cwd) return cwd
+    const meta = headerField(header, 'meta')
+    const metaCwd = meta && typeof meta === 'object' ? meta.cwd : undefined
+    return typeof metaCwd === 'string' && metaCwd ? metaCwd : null
+  }
+
+  function headerTitle(header) {
+    const direct = headerField(header, 'title')
+    if (typeof direct === 'string' && direct.trim()) return direct.trim()
+    const meta = headerField(header, 'meta')
+    const metaTitle = meta && typeof meta === 'object' ? meta.title : undefined
+    return typeof metaTitle === 'string' && metaTitle.trim() ? metaTitle.trim() : null
+  }
+
+  async function sessionLocation(header) {
+    try {
+      const located = sp.locate(header)
+      if (located && typeof located.path === 'string') return located.path
+    } catch (e) {}
+    return null
+  }
+
+  async function detachBeforeMove(sid) {
+    const activeId = getActiveSessionId(ctx)
+    if (activeId != null && String(activeId) === String(sid)) {
+      const error = new Error('该会话当前处于打开状态，请先切换到别的会话再操作。')
+      error.status = 409
+      throw error
+    }
+    const sessions = ctx.get('sessions')
+    const liveSession = sessions && sessions.get && sessions.get(sid)
+    if (!liveSession) return
+    const status = String(liveSession.status || liveSession.state || '').toLowerCase()
+    if (['running', 'working', 'busy', 'loading'].includes(status)) {
+      const error = new Error('该会话正在运行，请等待完成后再操作。')
+      error.status = 409
+      throw error
+    }
+    if (typeof sessions.flush === 'function') await sessions.flush(liveSession)
+    const entered = sessions.store && sessions.store.get && sessions.store.get(sid)
+    if (entered && typeof entered.detach === 'function') entered.detach()
+    const retirement = sp.retirements && sp.retirements.get && sp.retirements.get(sid)
+    if (retirement && typeof retirement.then === 'function') await retirement
+  }
+
+  async function reindexAfterColdMove(restored = null) {
+    try {
+      const reg = w
+      if (reg && typeof reg.replaceHeaderIndex === 'function') {
+        const rows = await lightSessionRows()
+        const hiddenIds = new Set([
+          ...(await COLD_STORE.list('archive')).map((item) => String(item.sessionId)),
+          ...(await COLD_STORE.list('trash')).map((item) => String(item.sessionId)),
+        ])
+        const headers = rows.flatMap((row) => {
+          const raw = row?.header && typeof row.header === 'object' ? row.header : row
+          const id = String(row?.sessionId ?? raw?.id ?? '')
+          if (!id || hiddenIds.has(id)) return []
+          return [{
+            ...(raw && typeof raw === 'object' ? raw : {}),
+            id,
+            ...(typeof row?.cwd === 'string' ? { cwd: row.cwd } : {}),
+            ...(typeof row?.projections?.values?.title === 'string' ? { title: row.projections.values.title } : {}),
+          }]
+        })
+        if (restored && !hiddenIds.has(String(restored.sessionId)) && !headers.some((header) => header.id === restored.sessionId)) {
+          headers.push({
+            id: restored.sessionId,
+            ...(restored.workspacePath ? { cwd: restored.workspacePath } : {}),
+            ...(restored.title ? { title: restored.title } : {}),
+            ...(restored.createdAt === null ? {} : { createdAt: restored.createdAt }),
+            ...(restored.updatedAt === null ? {} : { updatedAt: restored.updatedAt }),
+            ...(restored.parentSessionId ? { parentSession: restored.parentSessionId } : {}),
+            ...(restored.origin ? { origin: restored.origin } : {}),
+          })
+        }
+        await reg.replaceHeaderIndex(headers)
+      }
+      if (reg && typeof reg.rebuildEntities === 'function') reg.rebuildEntities()
+    } catch (e) {}
   }
 
   let wsByPath = {}
 
-  async function resolveOne(id) {
-    let title = null, createdAt = null, cwd = null
-    try {
-      const o = await sq.readTitleSnapshot(id)
-      if (o) {
-        if (o.title && o.title.title) title = String(o.title.title)
-        if (o.session) { cwd = o.session.cwd || null; createdAt = o.session.createdAt || null }
-      }
-    } catch (e) { /* fall back to raw log */ }
-    if (!title || !cwd) {
-      try {
-        const r = await sp.readFrom(id, 0)
-        if (r.meta) {
-          if (!cwd) cwd = r.meta.cwd || null
-          if (!createdAt) createdAt = r.meta.createdAt || null
-        }
-        if (!title && Array.isArray(r.events)) title = foldTitle(r.events)
-      } catch (e2) { /* keep what we have */ }
-    }
+  async function resolveOne(id, suppliedHeader = null, suppliedRow = null) {
+    const header = suppliedHeader || await persistedHeader(id)
+    const projectedTitle = suppliedRow?.projections?.values?.title
+    let title = (typeof projectedTitle === 'string' && projectedTitle.trim() ? projectedTitle.trim() : null) ||
+      headerTitle(header) || authorityTitleCache.get(String(id)) || null
+    let createdAt = headerField(header, 'createdAt') || suppliedRow?.createdAt || null
+    let cwd = typeof suppliedRow?.cwd === 'string' ? suppliedRow.cwd : headerWorkspace(header)
     const ws = cwd ? wsByPath[cwd] : undefined
     const workspaceGone = !!(cwd && !ws)
     const display = title ? (String(title).length > MAX_TITLE ? String(title).slice(0, MAX_TITLE) + '…' : String(title)) : null
@@ -201,53 +347,84 @@ export function apply(ctx) {
       sessionId: id,
       title: display,
       createdAt: createdAt || null,
+      updatedAt: typeof suppliedRow?.updatedAt === 'number' ? suppliedRow.updatedAt : createdAt || null,
       workspacePath: cwd || null,
       workspaceTitle: (ws && ws.title) ? ws.title : null,
       workspaceGone: workspaceGone ? true : false,
       hasWorkspace: !!cwd,
+      ...(typeof headerField(header, 'parentSession') === 'string' ? { parentSessionId: headerField(header, 'parentSession') } : {}),
+      ...(headerField(header, 'origin') === 'subagent' ? { origin: 'subagent' } : {}),
     }
   }
 
-  // Restore (unarchive) one session; throws on failure.
+  async function removeProjectionCache(sid) {
+    try {
+      const domain = storageDomain.get('session_projcache')
+      const table = domain && domain.table && domain.table('sessions')
+      if (table && typeof table.delete === 'function') await table.delete(sid)
+    } catch (e) {}
+  }
+
+  async function moveActiveToCold(kind, sid, wasArchived = false) {
+    requireSessionId(sid)
+    const header = await persistedHeader(sid)
+    if (!header) {
+      const error = new Error('找不到该会话')
+      error.status = 404
+      throw error
+    }
+    const located = await sessionLocation(header)
+    if (!located) throw new Error('找不到该会话的日志路径')
+    await detachBeforeMove(sid)
+    const sourceDirectory = dirname(located)
+    let sizeBytes = null
+    try { sizeBytes = (await stat(located)).size } catch (e) {}
+    const record = await COLD_STORE.move(kind, sourceDirectory, {
+      sessionId: sid,
+      title: headerTitle(header),
+      workspacePath: headerWorkspace(header),
+      createdAt: Number(headerField(header, 'createdAt')) || null,
+      updatedAt: Number(headerField(header, 'updatedAt')) || null,
+      sizeBytes,
+      originalRelativePath: relative(join(DSH_HOME, 'sessions'), sourceDirectory),
+      ...(typeof headerField(header, 'parentSession') === 'string'
+        ? { parentSessionId: headerField(header, 'parentSession') }
+        : {}),
+      ...(headerField(header, 'origin') === 'subagent' ? { origin: 'subagent' } : {}),
+      ...(wasArchived ? { wasArchived: true } : {}),
+    })
+    await removeProjectionCache(sid)
+    invalidateLightRows()
+    await reindexAfterColdMove()
+    return { ok: true, [kind === 'archive' ? 'archived' : 'trashed']: true, record }
+  }
+
+  async function migrateLegacyArchive(): Promise<void> {
+    let domain
+    try { domain = dom() } catch { return }
+    if (!domain?.global) return
+    const state = domain.global.get()
+    const legacyIds = Array.isArray(state?.archivedSessionIds)
+      ? state.archivedSessionIds.map(String).filter(Boolean)
+      : []
+    if (legacyIds.length === 0) return
+    const unresolved = []
+    for (const sid of legacyIds) {
+      if (await COLD_STORE.find('archive', sid)) continue
+      try { await moveActiveToCold('archive', sid, true) }
+      catch { unresolved.push(sid) }
+    }
+    const next = Object.assign({}, state, { archivedSessionIds: unresolved })
+    await domain.global.set(next)
+    if (w && 'state' in w) { try { w.state = next } catch (e) { /* best-effort */ } }
+  }
+
   async function restoreOne(sid) {
     requireSessionId(sid)
-    return mutateArchived((list) => list.includes(sid)
-      ? { next: list.filter((x) => x !== sid), value: { ok: true, restored: true } }
-      : { next: null, value: { ok: true, restored: false } })
-  }
-
-  // ---- Recycle bin (回收站) helpers ----------------------------------------
-  let trashMutation = Promise.resolve()
-  function normalizeTrashStore(raw) {
-    if (Array.isArray(raw)) return { schemaVersion: TRASH_SCHEMA_VERSION, settings: { ...DEFAULT_TRASH_SETTINGS }, items: raw, purgedSessionIds: [] }
-    const settings = raw && typeof raw.settings === 'object' ? raw.settings : {}
-    const retentionDays = Number.isInteger(settings.retentionDays) && settings.retentionDays >= 0 ? settings.retentionDays : 0
-    return {
-      schemaVersion: TRASH_SCHEMA_VERSION,
-      settings: { retentionDays },
-      items: raw && Array.isArray(raw.items) ? raw.items : [],
-      purgedSessionIds: raw && Array.isArray(raw.purgedSessionIds) ? [...new Set(raw.purgedSessionIds.filter(isSafeSessionId).map(String))] : [],
-    }
-  }
-  async function readTrashStore() {
-    try { return normalizeTrashStore(JSON.parse(readFileSync(TRASH_INDEX, 'utf8'))) } catch (e) { return normalizeTrashStore(null) }
-  }
-  async function readTrash() { return (await readTrashStore()).items }
-  async function writeTrashStore(store) {
-    await mkdir(TRASH_DIR, { recursive: true })
-    const tmp = join(TRASH_DIR, `.index-${process.pid}-${Date.now()}.tmp`)
-    await writeFile(tmp, JSON.stringify(normalizeTrashStore(store), null, 2), { encoding: 'utf8', mode: 0o600 })
-    await rename(tmp, TRASH_INDEX)
-  }
-  function mutateTrash(mutator) {
-    const operation = trashMutation.then(async () => {
-      const store = await readTrashStore()
-      const result = await mutator(store)
-      await writeTrashStore(store)
-      return result
-    })
-    trashMutation = operation.catch(() => {})
-    return operation
+    const record = await COLD_STORE.restore('archive', sid)
+    invalidateLightRows()
+    await reindexAfterColdMove(record)
+    return { ok: true, restored: true, record }
   }
 
   // ---- Starred sessions (收藏, schema v3) -----------------------------------
@@ -265,166 +442,55 @@ export function apply(ctx) {
     } catch (e) { /* best-effort */ }
   }
 
-  // Soft-delete one session: record it in the recycle-bin index but KEEP its
-  // log in the original workspace directory. Moving the file out (and detaching
-  // it from the workspace) orphaned the session into DSH's "未分组" group and
-  // made restore land in 未分组 instead of the original workspace — so we leave
-  // the file where it is and let the sidebar DOM shim hide the row instead.
   async function deleteOne(sid) {
     requireSessionId(sid)
-    // Soft-delete is always allowed — including the currently-active conversation.
-    // The log file stays in its original workspace dir (recorded in the 回收站
-    // index below), so the live session is unaffected and the entry stays
-    // recoverable from 回收站. (Move, by contrast, physically relocates the file
-    // and still guards the active session in moveTargetWorkspace.)
-    let header = null
-    let cwd = null
-    let title = null
-    let removedPath = null
-    try {
-      const headers = await sp.list()
-      header = headers.find((h) => String(h.id) === sid) || null
-      if (header) {
-        const loc = sp.locate(header)
-        if (loc && typeof loc.path === 'string') removedPath = loc.path
-        cwd = header.cwd || null
-        title = header.title || (header.meta && header.meta.title) || null
-      }
-      if (!title) {
-        const r = await sp.readFrom(sid, 0)
-        if (r && r.meta) { if (!cwd) cwd = r.meta.cwd; title = foldTitle(r.events) }
-      }
-    } catch (e) { /* best-effort */ }
-    // Record in the trash index only — the log stays in its workspace dir.
-    if (!header && !removedPath) {
-      const error = new Error('找不到该会话')
-      error.status = 404
-      throw error
+    const trashed = await COLD_STORE.find('trash', sid)
+    if (trashed) return { ok: true, trashed: false, record: trashed }
+    const archived = await COLD_STORE.find('archive', sid)
+    if (archived) {
+      const record = await COLD_STORE.transfer('archive', 'trash', sid)
+      await removeProjectionCache(sid)
+      invalidateLightRows()
+      await reindexAfterColdMove()
+      return { ok: true, trashed: true, record }
     }
-    const archived = await mutateArchived((list) => ({ next: null, value: list.includes(sid) })).catch(() => false)
-    await mutateTrash((store) => {
-      const entry = {
-        sessionId: sid, title: title || cwd || sid, cwd: cwd || null,
-        header: header || null, originalPath: removedPath || null,
-        sizeBytes: header && typeof header.size === 'number' ? header.size : null,
-        wasArchived: archived, deletedAt: Date.now(),
-      }
-      const at = store.items.findIndex((t) => String(t.sessionId) === sid)
-      if (at >= 0) store.items[at] = entry
-      else store.items.push(entry)
-      store.purgedSessionIds = store.purgedSessionIds.filter((id) => id !== sid)
-    })
-    return { ok: true, trashed: true }
+    return moveActiveToCold('trash', sid)
   }
 
-  // Restore a trashed session: the log never left its original workspace dir,
-  // so we just drop it from the recycle-bin index and the sidebar reveals it in
-  // its original workspace (no move / no re-attach needed).
   async function restoreFromTrash(sid) {
     requireSessionId(sid)
-    await mutateTrash(async (store) => {
-      const entry = store.items.find((t) => String(t.sessionId) === sid)
-      if (!entry) { const error = new Error('回收站中找不到该会话'); error.status = 404; throw error }
-      // Restore the pre-delete archive state before removing the durable trash
-      // entry. If this fails, mutateTrash does not write and the item remains
-      // recoverable instead of disappearing into an inconsistent state.
-      if (entry.wasArchived === false) await restoreOne(sid)
-      store.items = store.items.filter((t) => String(t.sessionId) !== sid)
-      store.purgedSessionIds = store.purgedSessionIds.filter((id) => id !== sid)
-    })
-    return { ok: true, restored: true }
+    const record = await COLD_STORE.restore('trash', sid)
+    invalidateLightRows()
+    await reindexAfterColdMove(record)
+    return { ok: true, restored: true, record }
   }
 
-  // Permanently erase a trashed session: physically delete its log (still in
-  // the original workspace dir) and detach it from any workspace so DSH drops it.
   async function purgeFromTrash(sid) {
     requireSessionId(sid)
-    let purged = false
-    await mutateTrash(async (store) => {
-      const entry = store.items.find((t) => String(t.sessionId) === sid)
-      if (!entry) { const error = new Error('回收站中找不到该会话'); error.status = 404; throw error }
-      let target = null
-      try {
-        const headers = await sp.list()
-        const current = headers.find((h) => String(h.id) === sid)
-        const located = current && sp.locate(current)
-        if (located && typeof located.path === 'string') target = located.path
-      } catch (e) {}
-      if (!target && typeof entry.originalPath === 'string') target = entry.originalPath
-      // JSONL persistence stores logs as
-      //   .../<sessionId>/session.jsonl.zstd
-      // Older backends may instead include the id in the filename itself.
-      // Accept both layouts, but reject every unrelated path before unlink.
-      const targetOwnsSession = target && (basename(dirname(target)) === sid || basename(target).includes(sid))
-      if (target && !targetOwnsSession) {
-        const error = new Error('日志路径与会话 ID 不匹配，已停止永久删除')
-        error.status = 409
-        throw error
-      }
-      // Persist the tombstone before any irreversible work. A crash after this
-      // point may leave the trash item retryable, but can never resurrect the
-      // session in a later list baseline.
-      if (!store.purgedSessionIds.includes(sid)) store.purgedSessionIds.push(sid)
-      await writeTrashStore(store)
-      // A freshly-created or recently-opened Session can remain resident after
-      // its file is unlinked. Flush once, then use SessionStore's entered-record
-      // detach capability so DSH emits host/session-removed and the client list
-      // drops the row instead of resurrecting it from live memory.
-      try {
-        const sessions = ctx.get('sessions')
-        const liveSession = sessions && sessions.get && sessions.get(sid)
-        if (liveSession && typeof sessions.flush === 'function') await sessions.flush(liveSession)
-        const entered = sessions && sessions.store && sessions.store.get && sessions.store.get(sid)
-        if (liveSession && (!entered || typeof entered.detach !== 'function')) throw new Error('宿主未提供 live Session detach 能力')
-        if (entered && typeof entered.detach === 'function') entered.detach()
-        // session/disposed starts an asynchronous persistence retirement. Wait
-        // for it before unlinking, otherwise its final drain can race the file
-        // deletion and briefly (or permanently) republish an orphan that the
-        // official sidebar groups under “未分组”.
-        const retirement = sp && sp.retirements && sp.retirements.get && sp.retirements.get(sid)
-        if (retirement && typeof retirement.then === 'function') await retirement
-      } catch (e) {
-        const error = new Error('无法从宿主内存移除会话，已停止永久删除：' + String((e && e.message) || e))
-        error.status = 409
-        throw error
-      }
-      if (target) {
-        try { await unlink(target) } catch (e) { if (e && e.code !== 'ENOENT') throw new Error('删除文件失败：' + String((e && e.message) || e)) }
-      }
-      try { for (const ent of w.list()) { if (ent.sessionIds.includes(sid)) { try { await ent.detachSession(sid) } catch (e) {} } } } catch (e) {}
-      try { if (w.sessionPaths && w.sessionPaths.delete) w.sessionPaths.delete(sid) } catch (e) {}
-      try { if (w.headers && w.headers.delete) w.headers.delete(sid) } catch (e) {}
-      await restoreOne(sid)
-      // Rebuild from the post-unlink disk baseline before reporting success.
-      // Merely deleting the two Maps above does not notify/rebuild Workspace
-      // entities, leaving the client with an orphaned “未分组” snapshot.
-      try { await reindexRegistry() } catch (e) { /* tombstone still prevents resurrection */ }
-      store.items = store.items.filter((t) => String(t.sessionId) !== sid)
-      purged = true
-    })
-    if (!purged) throw new Error('彻底删除失败')
+    const record = await COLD_STORE.purge('trash', sid)
+    await removeProjectionCache(sid)
+    invalidateLightRows()
+    await reindexAfterColdMove()
     stars.removeIds([sid]).catch(() => {})
-    return { ok: true, purged: true }
+    return { ok: true, purged: true, record }
   }
 
   async function trashSettings(next) {
-    if (next === undefined) return (await readTrashStore()).settings
+    if (next === undefined) return COLD_STORE.settings('trash')
     const days = Number(next.retentionDays)
     if (!Number.isInteger(days) || ![0, 7, 30, 90].includes(days)) {
       const error = new Error('retentionDays 仅支持 0、7、30、90')
       error.status = 400
       throw error
     }
-    await mutateTrash((store) => { store.settings = { retentionDays: days } })
-    return (await readTrashStore()).settings
+    return COLD_STORE.setSettings('trash', { retentionDays: days })
   }
 
   async function cleanupExpiredTrash() {
-    const store = await readTrashStore()
-    const days = store.settings.retentionDays
+    const days = (await COLD_STORE.settings('trash')).retentionDays
     if (!days) return 0
     const cutoff = Date.now() - days * 86400000
-    const ids = store.items.filter((item) => Number(item.deletedAt) > 0 && Number(item.deletedAt) < cutoff).map((item) => String(item.sessionId))
+    const ids = (await COLD_STORE.list('trash')).filter((item) => item.movedAt > 0 && item.movedAt < cutoff).map((item) => String(item.sessionId))
     let count = 0
     for (const sid of ids) { try { await purgeFromTrash(sid); count++ } catch (e) {} }
     return count
@@ -465,7 +531,7 @@ export function apply(ctx) {
     if (activeId != null && String(activeId) === String(sid)) {
       throw new Error('该会话当前处于打开状态，请先切换到别的会话再移动。')
     }
-    const r = await sp.readFrom(sid, 0)
+    const r = await readStoredSession(sid)
     if (!r || !r.meta) throw new Error('无法读取该会话的日志')
     const meta = r.meta
     const events = r.events
@@ -652,7 +718,19 @@ export function apply(ctx) {
     const reg = w
     if (!reg || typeof reg.replaceHeaderIndex !== 'function') return false
     let headers = null
-    try { headers = await sp.list() } catch (e) { headers = null }
+    try {
+      const rows = await lightSessionRows()
+      headers = rows.flatMap((row) => {
+        const raw = row?.header && typeof row.header === 'object' ? row.header : row
+        const id = String(row?.sessionId ?? raw?.id ?? '')
+        if (!id) return []
+        return [{
+          ...(raw && typeof raw === 'object' ? raw : {}),
+          id,
+          ...(typeof row?.cwd === 'string' ? { cwd: row.cwd } : {}),
+        }]
+      })
+    } catch (e) { headers = null }
     if (!headers || !Array.isArray(headers)) return false
     await reg.replaceHeaderIndex(headers)
     if (typeof reg.rebuildEntities === 'function') reg.rebuildEntities()
@@ -672,112 +750,140 @@ export function apply(ctx) {
   // persisted) — a genuine miss surfaces as an error.
   async function archiveOne(sid) {
     requireSessionId(sid)
-    return mutateArchived(async (list) => {
-      if (list.includes(sid)) return { next: null, value: { ok: true, archived: false } }
-      await w.archiveSession(sid)
-      // archiveSession owns the durable write; keep this operation serialized
-      // with restoreOne so two requests cannot overwrite each other's state.
-      return { next: null, value: { ok: true, archived: true } }
-    })
+    if (await COLD_STORE.find('archive', sid)) return { ok: true, archived: false }
+    const trashed = await COLD_STORE.find('trash', sid)
+    if (trashed) {
+      const record = await COLD_STORE.transfer('trash', 'archive', sid)
+      invalidateLightRows()
+      await reindexAfterColdMove()
+      return { ok: true, archived: true, transferred: true, record }
+    }
+    return moveActiveToCold('archive', sid)
+  }
+
+  async function renameOne(sid, title) {
+    requireSessionId(sid)
+    if (typeof title !== 'string' || !title.trim()) {
+      const error = new Error('会话名称不能为空')
+      error.status = 400
+      throw error
+    }
+    if (await COLD_STORE.find('archive', sid) || await COLD_STORE.find('trash', sid)) {
+      const error = new Error('冷存会话请先恢复后再重命名')
+      error.status = 409
+      throw error
+    }
+    if (!sessionController || typeof sessionController.rename !== 'function') {
+      throw new Error('当前 DSH 未提供会话重命名服务')
+    }
+    const result = await sessionController.rename({ sessionId: sid, title: title.trim() })
+    invalidateLightRows()
+    authorityTitleCache.set(sid, typeof result?.title === 'string' ? result.title : title.trim())
+    return { ok: true, title: authorityTitleCache.get(sid) }
   }
 
   async function allSessionItems() {
-    let materialized = new Set()
-    let live = ctx.get('sessions')
-    let headersOk = false
-    try {
-      const headers = await sp.list()
-      materialized = new Set(headers.map((h) => String(h.id)))
-      headersOk = true
-    } catch (e) { /* best-effort */ }
-    const ids = []
-    try { for (const header of await sp.list()) ids.push(String(header.id)) } catch (e) { /* ignore */ }
-    if (live) { try { live.list().forEach((s) => { if (!ids.includes(String(s.id))) ids.push(String(s.id)) }) } catch (e) { /* ignore */ } }
-    // Exclude sessions already moved to the recycle bin (软删除): they live in
-    // 回收站, not in 会话管理, so the panel won't re-list them after a delete.
-    let hiddenIds = new Set()
-    try {
-      const store = await readTrashStore()
-      hiddenIds = new Set([...store.items.map((t) => String(t.sessionId)), ...store.purgedSessionIds.map(String)])
-    } catch (e) {}
-    const visibleIds = ids.filter((id) => !hiddenIds.has(id))
+    const rows = await lightSessionRows()
+    const archiveItems = await COLD_STORE.list('archive')
+    const trashItems = await COLD_STORE.list('trash')
+    const hiddenIds = new Set([...archiveItems.map((item) => item.sessionId), ...trashItems.map((item) => item.sessionId)])
     wsByPath = {}
     try { for (const ent of w.list()) wsByPath[ent.path] = ent } catch (e) { wsByPath = {} }
-    const currentArchived = new Set((await archivedState().catch(() => ({ archivedSessionIds: [] }))).archivedSessionIds || [])
     const items = []
-    const CHUNK = 6
-    for (let i = 0; i < visibleIds.length; i += CHUNK) {
-      const res2 = await Promise.all(visibleIds.slice(i, i + CHUNK).map(resolveOne))
-      for (const it of res2) items.push({ ...it, archived: currentArchived.has(it.sessionId) })
+    for (const row of rows) {
+      const id = String(row.sessionId ?? row.header?.id ?? '')
+      if (!id || hiddenIds.has(id)) continue
+      const header = row.header && typeof row.header === 'object' ? row.header : row
+      items.push({ ...(await resolveOne(id, header, row)), archived: false })
     }
     // Annotate stars; GC only when we have a trustworthy id baseline, so a
     // failing sp.list() can never wipe the whole index.
     let starredSet = new Set()
     try { starredSet = new Set((await stars.read()).starredSessionIds) } catch (e) {}
     for (const it of items) it.starred = starredSet.has(String(it.sessionId))
-    if (headersOk) await gcStars(ids)
+    const validIds = [...rows.map((row) => String(row.sessionId ?? row.header?.id ?? '')), ...archiveItems.map((item) => item.sessionId), ...trashItems.map((item) => item.sessionId)]
+    if (rows.length > 0) await gcStars(validIds)
     return items
   }
 
   async function sidebarAuthority() {
-    const ids = []
-    try { for (const header of await sp.list()) ids.push(String(header.id)) } catch (e) {}
-    const sessions = ctx.get('sessions')
-    try { if (sessions) sessions.list().forEach((session) => { if (!ids.includes(String(session.id))) ids.push(String(session.id)) }) } catch (e) {}
-    const store = await readTrashStore()
-    if (!authorityTitlesLoaded && ids.length && typeof sq.readTitleSnapshots === 'function') {
-      const results = await sq.readTitleSnapshots(ids)
-      results.forEach((result, index) => {
-        if (result && result.status === 'fulfilled' && result.value && result.value.title && typeof result.value.title.title === 'string') {
-          authorityTitleCache.set(ids[index], result.value.title.title)
-        }
-      })
-      authorityTitlesLoaded = true
-    } else if (!authorityTitlesLoaded) {
-      for (const sid of ids) {
-        try {
-          const snapshot = await sq.readTitleSnapshot(sid)
-          if (snapshot && snapshot.title && typeof snapshot.title.title === 'string') authorityTitleCache.set(sid, snapshot.title.title)
-        } catch (e) {}
-      }
-      authorityTitlesLoaded = true
+    const rows = await lightSessionRows()
+    const trashItems = await COLD_STORE.list('trash')
+    const archiveItems = await COLD_STORE.list('archive')
+    for (const row of rows) {
+      const sid = String(row?.sessionId ?? row?.header?.id ?? '')
+      const title = row?.projections?.values?.title
+      if (sid && typeof title === 'string' && title.trim()) authorityTitleCache.set(sid, title.trim())
     }
+    for (const item of [...archiveItems, ...trashItems]) {
+      if (item.title) authorityTitleCache.set(String(item.sessionId), item.title)
+    }
+    authorityTitlesLoaded = true
     return {
       titles: Object.fromEntries(authorityTitleCache),
-      trashedSessionIds: store.items.map((item) => String(item.sessionId)),
-      purgedSessionIds: store.purgedSessionIds.map(String),
+      trashedSessionIds: trashItems.map((item) => String(item.sessionId)),
+      archivedSessionIds: archiveItems.map((item) => String(item.sessionId)),
+      purgedSessionIds: [],
     }
   }
 
-  // 聚合一条会话的详情（磁盘占用 / 轮次·步数·消息数 / 工具统计 / fetch /
-  // write/edit 文件 / 血统 parent/children/subagents）。live 与持久化会话都可读。
-  // 所有统计对未知事件类型容错；fetch 与 files 做上限截断，files 用 stat 过滤
-  // 磁盘上已不存在的路径，避免详情面板列出已删除文件。
-  async function buildDetails(sid) {
+  async function coldLogPath(kind, record) {
+    const directory = COLD_STORE.pathFor(kind, record)
+    const entries = await readdir(directory, { withFileTypes: true })
+    const candidates = entries
+      .filter((entry) => entry.isFile() && /\.jsonl(?:\.zstd)?$/i.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((left, right) => {
+        const version = (name) => Number(name.match(/\.v(\d+)\.jsonl/i)?.[1] ?? 0)
+        return version(right) - version(left) || Number(right.endsWith('.zstd')) - Number(left.endsWith('.zstd'))
+      })
+    if (!candidates[0]) throw new Error('冷存会话日志文件不存在')
+    return join(directory, candidates[0])
+  }
+
+  async function readSessionForDetails(sid) {
+    const archive = await COLD_STORE.find('archive', sid)
+    const trash = archive ? undefined : await COLD_STORE.find('trash', sid)
+    const coldKind = archive ? 'archive' : trash ? 'trash' : undefined
+    const coldRecord = archive ?? trash
+    if (coldKind && coldRecord) {
+      const filePath = await coldLogPath(coldKind, coldRecord)
+      const decoded = readSessionLogFile(filePath)
+      return { meta: decoded.meta, events: decoded.events, sizeBytes: coldRecord.sizeBytes }
+    }
     const sessions = ctx.get('sessions')
     const live = sessions && sessions.get(sid)
-    let meta = null
-    let events = []
-    if (live !== void 0) {
-      meta = (live && live.header) || null
-      try { events = Array.isArray(live.events) ? [...live.events] : [] } catch (e) { events = [] }
-    } else {
-      const r = await sp.readFrom(sid, 0)
-      if (!r || !r.meta) throw new Error('找不到该会话的记录（会话不存在）')
-      meta = r.meta
-      events = Array.isArray(r.events) ? r.events : []
+    if (live !== undefined) {
+      const events = typeof live.snapshotEvents === 'function'
+        ? [...live.snapshotEvents()]
+        : Array.isArray(live.events) ? [...live.events] : []
+      return { meta: live.header || null, events, sizeBytes: null }
     }
-    let sizeBytes = null
+    const r = await readStoredSession(sid)
+    if (!r || !r.meta) throw new Error('找不到该会话的记录（会话不存在）')
+    return { meta: r.meta, events: Array.isArray(r.events) ? r.events : [], sizeBytes: null }
+  }
+
+  // 聚合一条会话的详情（磁盘占用 / 轮次·步数·消息数 / 工具统计 / fetch /
+  // write/edit 文件 / 血统 parent/children/subagents）。live 与冷存会话都可读。
+  // 详情是显式按需操作；列表和启动路径不会调用本函数。
+  async function buildDetails(sid) {
+    requireSessionId(sid)
+    const sessions = ctx.get('sessions')
+    const loaded = await readSessionForDetails(sid)
+    const meta = loaded.meta || {}
+    const events = loaded.events
+    let sizeBytes = loaded.sizeBytes
     try {
-      // rc.8 的 sessionPersistence 后端没有 artifactInfo；用 locate(meta) 拿日志
-      // 文件真实路径后 stat 出字节数（磁盘占用）。
-      const loc = sp.locate(meta)
-      if (loc && typeof loc.path === 'string' && loc.path) {
-        const st = await stat(loc.path)
-        if (st && typeof st.size === 'number') sizeBytes = st.size
+      if (sizeBytes === null) {
+        const loc = sp.locate(meta)
+        if (loc && typeof loc.path === 'string' && loc.path) {
+          const st = await stat(loc.path)
+          if (st && typeof st.size === 'number') sizeBytes = st.size
+        }
       }
     } catch (e) { sizeBytes = null }
-    let lastTime = typeof meta && typeof meta.createdAt === 'number' ? meta.createdAt : 0
+    let lastTime = typeof meta.createdAt === 'number' ? meta.createdAt : 0
     const fileSet = new Map()
     const stats = {
       turns: 0, steps: 0, userMessages: 0, assistantMessages: 0,
@@ -843,11 +949,16 @@ export function apply(ctx) {
     const childrenSet = new Set()
     const subagentSet = new Set()
     try {
-      if (typeof sp.list === 'function') {
-        for (const h of await sp.list()) {
-          if (String(h.parentSession) !== String(sid)) continue
-          if (h.origin === 'subagent') subagentSet.add(h.id); else childrenSet.add(h.id)
-        }
+      for (const row of await lightSessionRows()) {
+        const childId = String(row?.sessionId ?? row?.header?.id ?? '')
+        const parentId = row?.parentSessionId ?? row?.header?.parentSession
+        if (!childId || String(parentId ?? '') !== String(sid)) continue
+        if (row?.origin === 'subagent' || row?.header?.origin === 'subagent') subagentSet.add(childId)
+        else childrenSet.add(childId)
+      }
+      for (const item of [...await COLD_STORE.list('archive'), ...await COLD_STORE.list('trash')]) {
+        if (String(item.parentSessionId ?? '') !== String(sid)) continue
+        if (item.origin === 'subagent') subagentSet.add(item.sessionId); else childrenSet.add(item.sessionId)
       }
     } catch (e) { /* best-effort */ }
     if (sessions) {
@@ -871,12 +982,49 @@ export function apply(ctx) {
     }
   }
 
+  const sessionCore: SessionCore = {
+    listActive: allSessionItems,
+    listArchive: () => COLD_STORE.list('archive'),
+    listTrash: async () => {
+      await cleanupExpiredTrash()
+      return COLD_STORE.list('trash')
+    },
+    archive: archiveOne,
+    restore: restoreOne,
+    delete: deleteOne,
+    restoreTrash: restoreFromTrash,
+    purge: purgeFromTrash,
+    rename: async (sid, title) => (await renameOne(sid, title)).title,
+    readEvents: async (sid, fromSeq = 0) => {
+      const value = await readSessionForDetails(sid)
+      return (value.events || []).filter((event) => typeof event?.seq !== 'number' || event.seq >= fromSeq)
+    },
+    readDetails: buildDetails,
+    readExport: async (sid) => {
+      const value = await readSessionForDetails(sid)
+      if (!value.meta) throw new Error('无法读取该会话的日志')
+      return renderSessionMarkdown({ ...value.meta, id: sid }, value.events || [])
+    },
+    coldRecord: (kind, sid) => COLD_STORE.find(kind, sid),
+  }
+  const unregisterCore = registerSessionCore(sessionCore)
+  void lightSessionRows().catch(() => undefined)
+
   ctx.effect(() => {
     const disposers = []
+    if (typeof ctx.provide === 'function') {
+      try { disposers.push(ctx.provide('dshSessionCore', sessionCore)) } catch (e) { /* registry fallback remains active */ }
+    }
+    disposers.push(unregisterCore)
+    void migrateLegacyArchive().catch(() => undefined)
 
+    if (typeof ctx.on === 'function') disposers.push(ctx.on('session/created', () => {
+      invalidateLightRows()
+    }))
     if (typeof ctx.on === 'function') disposers.push(ctx.on('session/event', (session, event) => {
       if (event && event.type === 'session/title' && event.data && typeof event.data.title === 'string') {
         authorityTitleCache.set(String(session.id), event.data.title)
+        invalidateLightRows()
       }
     }))
 
@@ -885,27 +1033,7 @@ export function apply(ctx) {
       path: '/archived-sessions/list',
       handler: async (req, res) => {
         try {
-          const state = await archivedState()
-          const ids = state.archivedSessionIds || []
-          // Only surface archived ids that still exist (materialized log or live).
-          // Deleted sessions keep a hidden archive id but no log, so they drop out here.
-          let materialized = new Set()
-          let live = ctx.get('sessions')
-          try {
-            const headers = await sp.list()
-            materialized = new Set(headers.map((h) => String(h.id)))
-          } catch (e) { /* best-effort */ }
-          const trashStore = await readTrashStore()
-          const hidden = new Set([...trashStore.items.map((item) => String(item.sessionId)), ...trashStore.purgedSessionIds.map(String)])
-          const idStrs = ids.map(String).filter((id) => !hidden.has(id) && (materialized.has(id) || (live && live.get(id))))
-          wsByPath = {}
-          try { for (const ent of w.list()) wsByPath[ent.path] = ent } catch (e) { wsByPath = {} }
-          const items = []
-          const CHUNK = 6
-          for (let i = 0; i < idStrs.length; i += CHUNK) {
-            const res2 = await Promise.all(idStrs.slice(i, i + CHUNK).map(resolveOne))
-            items.push.apply(items, res2)
-          }
+          const items = await COLD_STORE.list('archive')
           json(res, { items })
         } catch (e) {
           json(res, { error: String((e && e.message) || e) }, 500)
@@ -990,10 +1118,8 @@ export function apply(ctx) {
       handler: async (req, res) => {
         try {
           await cleanupExpiredTrash()
-          const list = await readTrash()
-          list.sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0))
-          const store = await readTrashStore()
-          json(res, { schemaVersion: store.schemaVersion, settings: store.settings, purgedSessionIds: store.purgedSessionIds, items: list })
+          const list = await COLD_STORE.list('trash')
+          json(res, { schemaVersion: 1, settings: await COLD_STORE.settings('trash'), purgedSessionIds: [], items: list })
         } catch (e) {
           json(res, { ok: false, error: String((e && e.message) || e) }, errorStatus(e))
         }
@@ -1021,11 +1147,12 @@ export function apply(ctx) {
       path: '/archived-sessions/trash/verify',
       handler: async (req, res) => {
         try {
-          const items = await readTrash()
+          const items = await COLD_STORE.list('trash')
           const results = await Promise.all(items.map(async (item) => {
             let exists = false
-            if (typeof item.originalPath === 'string') exists = await stat(item.originalPath).then(() => true).catch(() => false)
-            return { sessionId: item.sessionId, status: exists ? 'ok' : 'missing', originalPath: item.originalPath || null }
+            const target = join(COLD_STORE.trashRoot, item.storedRelativePath)
+            exists = await stat(target).then((value) => value.isDirectory()).catch(() => false)
+            return { sessionId: item.sessionId, status: exists ? 'ok' : 'missing', originalRelativePath: item.originalRelativePath }
           }))
           json(res, { ok: true, healthy: results.filter((r) => r.status === 'ok').length, missing: results.filter((r) => r.status === 'missing').length, results })
         } catch (e) {
@@ -1043,6 +1170,41 @@ export function apply(ctx) {
           const sid = body && typeof body.sessionId === 'string' ? body.sessionId : null
           if (!sid) return json(res, { ok: false, error: 'missing sessionId' }, 400)
           json(res, await restoreFromTrash(sid))
+        } catch (e) {
+          json(res, { ok: false, error: String((e && e.message) || e) }, 500)
+        }
+      },
+    }))
+
+    disposers.push(webServer.register({
+      kind: 'exact',
+      path: '/archived-sessions/trash/archive',
+      handler: async (req, res) => {
+        try {
+          const body = await readJsonBody(req)
+          const sid = body && typeof body.sessionId === 'string' ? body.sessionId : null
+          if (!sid) return json(res, { ok: false, error: 'missing sessionId' }, 400)
+          json(res, await archiveOne(sid))
+        } catch (e) {
+          json(res, { ok: false, error: String((e && e.message) || e) }, errorStatus(e))
+        }
+      },
+    }))
+
+    disposers.push(webServer.register({
+      kind: 'exact',
+      path: '/archived-sessions/trash/archive-many',
+      handler: async (req, res) => {
+        try {
+          const body = await readJsonBody(req)
+          const ids = parseIds(body)
+          if (!ids || ids.length === 0) return json(res, { ok: false, error: 'missing sessionIds' }, 400)
+          const results = []
+          for (const sid of ids) {
+            try { results.push({ sessionId: sid, ok: true, ...(await archiveOne(sid)) }) }
+            catch (e) { results.push({ sessionId: sid, ok: false, error: String((e && e.message) || e) }) }
+          }
+          json(res, { ok: true, archived: results.filter((r) => r.ok).length, results })
         } catch (e) {
           json(res, { ok: false, error: String((e && e.message) || e) }, 500)
         }
@@ -1118,6 +1280,21 @@ export function apply(ctx) {
       },
     }))
 
+    disposers.push(webServer.register({
+      kind: 'exact',
+      path: '/archived-sessions/rename',
+      handler: async (req, res) => {
+        try {
+          const body = await readJsonBody(req)
+          const sid = body && typeof body.sessionId === 'string' ? body.sessionId : null
+          if (!sid) return json(res, { ok: false, error: 'missing sessionId' }, 400)
+          json(res, { sessionId: sid, ...(await renameOne(sid, body.title)) })
+        } catch (e) {
+          json(res, { ok: false, error: String((e && e.message) || e) }, errorStatus(e))
+        }
+      },
+    }))
+
     // Human-readable Markdown export (one session). Raw-log ZIP export is
     // dsh's own GET /api/session.export — we deliberately do not duplicate it
     // (see reports/HANDOFF-dsh-sessions-manager-roadmap.md §2.4).
@@ -1129,8 +1306,8 @@ export function apply(ctx) {
           const url = new URL(req.url, 'http://localhost')
           const sid = url.searchParams.get('sessionId')
           requireSessionId(sid)
-          const r = await sp.readFrom(sid, 0)
-          if (!r || !r.meta) {
+          const r = await readSessionForDetails(sid)
+          if (!r.meta) {
             const error = new Error('无法读取该会话的日志')
             error.status = 404
             throw error

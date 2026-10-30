@@ -12,7 +12,7 @@
 > connection, command routing, approval flow, and workspace scaffolding originate upstream; its copyright and
 > AGPL-3.0 obligations continue to apply.
 >
-> Maintained by **见川**, this repository adds in-process compatibility with DSH `0.1.2-rc.1`, cross-workspace
+> Maintained by **见川**, this repository targets DSH `0.1.5-rc.3` (with a retained `0.1.2-rc.1` compatibility claim), cross-workspace
 > aliases, recycle-bin and permanent deletion, an integrated Web session manager, half/full Feishu attachment,
 > and a unified approval path that mirrors only native DSH approvals. See [`NOTICE.md`](NOTICE.md) and
 > [`docs/PROJECT_IDENTITY.md`](docs/PROJECT_IDENTITY.md).
@@ -24,7 +24,7 @@ package name remains `dsh-lark-bot` for compatibility; the project and repositor
 **DSH Feishu Session Control / dsh-feishu-session-control**.
 
 - Uses Feishu's WebSocket connection; no public IP, domain, server, or tunnel is required.
-- Runs in the DSH host process and supports DSH `0.1.2-rc.1`.
+- Runs in the DSH host process and primarily targets DSH `0.1.5-rc.3` (also retaining `0.1.2-rc.1` compatibility).
 - Contains no Guardian: it never takes over, starts, or restarts DSH after DSH stops.
 - Sessions created in Web are detached from Feishu unless a Feishu chat explicitly attaches to them.
 
@@ -60,7 +60,7 @@ dsh --profile web
 ```
 
 On Windows, the local package spec can look like
-`file:E:/Vibecoding-Mirasim/dsh-feishu-session-control`. `setup` installs the same integrated package into the
+`file:E:/DeepSeekHarness/dsh-plugins/dsh-feishu-session-control`. `setup` installs the same integrated package into the
 bridge profile and the `web` profile. Bind the app using the QR code printed at first start, or provide
 `DSH_LARK_APP_ID`, `DSH_LARK_APP_SECRET`, and `DSH_LARK_TENANT`.
 

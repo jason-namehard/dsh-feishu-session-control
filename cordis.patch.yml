@@ -42,6 +42,9 @@
     - id: dsh-session-manager
       name: 'dsh-lark-bot/session-manager'
 
+    - id: dsh-plugin-manager
+      name: 'dsh-lark-bot/plugin-manager'
+
     - id: lark-notify
       name: 'dsh-lark-bot/notify'
       config:

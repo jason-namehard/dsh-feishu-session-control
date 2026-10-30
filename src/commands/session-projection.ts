@@ -14,6 +14,8 @@ import type { PreparedSessionBinding, SessionProjectionBridge } from '../session
 import type { SessionProjectionStore } from '../session/projection-store.js';
 import type { FeishuConnectionMode } from '../session/projection-store.js';
 import type { SessionAliasManager } from '../session/alias-manager.js';
+import type { ActiveRuns } from '../bot/active-runs.js';
+import type { WorkspaceStore } from '../workspace/store.js';
 import {
   renderSessionCandidateCard,
   renderSessionDeleteConfirmCard,
@@ -132,6 +134,15 @@ export class SessionProjectionController {
     channel: CommandChannel;
     aliases?: SessionAliasManager;
     confirmationTtlMs?: number;
+    /**
+     * Scope → workspace registry and the run ledger, so a switch onto a session
+     * that lives elsewhere can follow it the way `/cd` does. Optional because
+     * embedded callers (the SDK/ACP adapters) may not mount a workspace layer;
+     * `adoptWorkspace` then fails closed with the manual `/cd` instruction
+     * rather than binding a chat to a workspace it cannot route to.
+     */
+    workspaces?: WorkspaceStore;
+    activeRuns?: ActiveRuns;
   }) {}
 
   async handleAliasCommand(command: 'sessions' | 'use' | 'delete' | 'purge', args: string, ctx: CommandContext): Promise<void> {
@@ -150,70 +161,96 @@ export class SessionProjectionController {
     }
     if (command === 'sessions') {
       if (args.trim()) throw new Error('Usage: /sessions');
-      const sessions = await this.deps.bridge.listSessions();
-      await this.deps.aliases.syncSessions(sessions.map((session) => ({
-        sessionId: session.sessionId,
-        updatedAt: session.updatedAt,
-      })));
-      const byId = new Map(sessions.map((session) => [session.sessionId, session]));
-      const entries = this.deps.aliases.entries().filter((entry) => byId.has(entry.sessionId));
-      // Which session this chat is actually talking to. Two places can know:
-      // the projection store, written only when /use confirms a switch, and the
-      // run-flow's own session map, written whenever a turn runs — including
-      // the very first message in a fresh chat, which mints a session without
-      // anyone choosing it.
-      //
-      // Reading only the projection store is why a brand-new group showed no
-      // current session: dsh had created one and the Web UI listed it, but
-      // nothing had been *confirmed*, so /sessions marked nothing and told you
-      // to bind — while the chat had in fact been using that session all along.
-      // It only started reporting correctly after a /use, which is exactly the
-      // symptom. The run-flow map is the broader truth, so it is the fallback.
-      const boundCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
-      const boundSessionId = this.deps.store.get(ctx.scope, boundCwd)?.sessionId
-        ?? this.deps.sessions.resumeFor(ctx.scope, boundCwd);
-      const connection = this.deps.store.get(ctx.scope, boundCwd);
-      // Rendered once, not bilingually: every line is aliases, titles and ids,
-      // which read identically in both languages, so a bilingual list repeated
-      // the whole thing and looked like the bot had sent two cards.
-      const lines = ['**DSH 会话列表 · Sessions**', ''];
-      if (entries.length === 0) {
-        lines.push('暂无可用会话 · No sessions available.');
-      } else {
-        let currentDate = '';
-        for (const entry of entries) {
-          const datePrefix = entry.alias.slice(0, 4);
-          if (datePrefix !== currentDate) {
-            currentDate = datePrefix;
-            lines.push(`**${datePrefix}**`);
-          }
-          const session = byId.get(entry.sessionId)!;
-          const title = session.title?.trim() || '未命名会话 · untitled';
-          const status = session.trashed
-            ? '🗑 回收站'
-            : session.running ? '▶ 运行中' : '· 空闲';
-          const modeLabel = connection?.sessionId === entry.sessionId
-            ? ` · **${connection.connectionMode === 'full' ? '完整衔接' : '半衔接'}**`
-            : ' · 未连接飞书';
-          const here = entry.sessionId === boundSessionId
-            ? ` ← **当前对话**${modeLabel}`
-            : '';
-          lines.push(`- \`${entry.alias}\` · **${title}** · ${status}${here}`);
-        }
-        if (boundSessionId === undefined) {
-          lines.push('', '当前对话还没有会话，发一条消息会自动新建一个，或用 `/use <别名>` 绑到已有的。');
-        } else if (!entries.some((entry) => entry.sessionId === boundSessionId)) {
-          // The chat is on a session the alias list does not cover — a
-          // different workspace, or one already in the recycle bin. Saying so
-          // beats silently marking nothing, which reads as "not bound".
-          lines.push('', `当前对话的会话不在上面的列表里（\`${boundSessionId}\`），可能属于其它工作空间。`);
-        }
-      }
+      // Read-only, so answering late only costs a re-sent list: run the work
+      // behind an immediate reply instead of holding the command callback open.
+      // The session listing route can take tens of seconds on a large history
+      // (measured 53s on 2026-09-13), which is longer than the callback allows —
+      // the operator saw "The operation was aborted due to timeout" for a list
+      // that was in fact coming.
       await ctx.channel.sendMarkdown(
         ctx.chatId,
-        lines.join('\n'),
+        bilingualMarkdown('正在读取会话列表…', 'Reading the session list…'),
         this.options(ctx.threadId),
       );
+      void (async () => {
+        const sessions = await this.deps.bridge.listSessions();
+        await this.deps.aliases!.syncSessions(sessions.map((session) => ({
+          sessionId: session.sessionId,
+          updatedAt: session.updatedAt,
+        })));
+        const byId = new Map(sessions.map((session) => [session.sessionId, session]));
+        const entries = this.deps.aliases!.entries().filter((entry) => byId.has(entry.sessionId));
+        // Which session this chat is actually talking to. Two places can know:
+        // the projection store, written only when /use confirms a switch, and the
+        // run-flow's own session map, written whenever a turn runs — including
+        // the very first message in a fresh chat, which mints a session without
+        // anyone choosing it.
+        //
+        // Reading only the projection store is why a brand-new group showed no
+        // current session: dsh had created one and the Web UI listed it, but
+        // nothing had been *confirmed*, so /sessions marked nothing and told you
+        // to bind — while the chat had in fact been using that session all along.
+        // It only started reporting correctly after a /use, which is exactly the
+        // symptom. The run-flow map is the broader truth, so it is the fallback.
+        const boundCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
+        const boundSessionId = this.deps.store.get(ctx.scope, boundCwd)?.sessionId
+          ?? this.deps.sessions.resumeFor(ctx.scope, boundCwd);
+        const connection = this.deps.store.get(ctx.scope, boundCwd);
+        // Rendered once, not bilingually: every line is aliases, titles and ids,
+        // which read identically in both languages, so a bilingual list repeated
+        // the whole thing and looked like the bot had sent two cards.
+        const lines = ['**DSH 会话列表 · Sessions**', ''];
+        if (entries.length === 0) {
+          lines.push('暂无可用会话 · No sessions available.');
+        } else {
+          let currentDate = '';
+          for (const entry of entries) {
+            const datePrefix = entry.alias.slice(0, 4);
+            if (datePrefix !== currentDate) {
+              currentDate = datePrefix;
+              lines.push(`**${datePrefix}**`);
+            }
+            const session = byId.get(entry.sessionId)!;
+            const title = session.title?.trim() || '未命名会话 · untitled';
+            const status = session.trashed
+              ? '🗑 回收站'
+              : session.running ? '▶ 运行中' : '· 空闲';
+            const modeLabel = connection?.sessionId === entry.sessionId
+              ? ` · **${connection.connectionMode === 'full' ? '完整衔接' : '半衔接'}**`
+              : ' · 未连接飞书';
+            const here = entry.sessionId === boundSessionId
+              ? ` ← **当前对话**${modeLabel}`
+              : '';
+            // A row from another workspace is now selectable — `/use` follows the
+            // session — so say which workspace it belongs to instead of leaving
+            // the operator to guess why its path differs.
+            const elsewhere = session.cwd && session.cwd !== boundCwd ? ` · ⧉ \`${session.cwd}\`` : '';
+            lines.push(`- \`${entry.alias}\` · **${title}** · ${status}${elsewhere}${here}`);
+          }
+          if (boundSessionId === undefined) {
+            lines.push('', '当前对话还没有会话，发一条消息会自动新建一个，或用 `/use <别名>` 绑到已有的。');
+          } else if (!entries.some((entry) => entry.sessionId === boundSessionId)) {
+            // The chat is on a session the alias list does not cover — a
+            // different workspace, or one already in the recycle bin. Saying so
+            // beats silently marking nothing, which reads as "not bound".
+            lines.push('', `当前对话的会话不在上面的列表里（\`${boundSessionId}\`），可能属于其它工作空间。`);
+          }
+        }
+        await ctx.channel.sendMarkdown(
+          ctx.chatId,
+          lines.join('\n'),
+          this.options(ctx.threadId),
+        );
+      })().catch(async (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          await ctx.channel.sendMarkdown(
+            ctx.chatId,
+            bilingualMarkdown(`⚠️ 读取会话列表失败：${message}`, `⚠️ Could not read the session list: ${message}`),
+            this.options(ctx.threadId),
+          );
+        } catch { /* the immediate reply already told the operator something is coming */ }
+      });
       return;
     }
     const resolved = await this.resolveSessionArgument(command, alias!);
@@ -241,12 +278,18 @@ export class SessionProjectionController {
     }
     const workspaceCwd = ctx.workspaces.cwdFor(ctx.scope) ?? ctx.defaultWorkspace;
     if (command === 'use') {
-      if (session.cwd && session.cwd !== workspaceCwd) {
-        throw new Error(`${target.label} belongs to workspace ${session.cwd}; switch workspace first`);
-      }
+      // A session in another workspace is switchable, not an error: `/use` and
+      // the picker card both list every workspace, so refusing here made rows
+      // the bot had just offered un-tappable. Follow the session instead.
+      const targetCwd = session.cwd && session.cwd !== workspaceCwd
+        ? await this.adoptWorkspace({ scope: ctx.scope, currentCwd: workspaceCwd, targetCwd: session.cwd })
+        : workspaceCwd;
+      // Deliberately awaited: the ownership/admin checks inside must still reject
+      // the command (an ordinary user may not migrate another scope's binding),
+      // and a detached failure would surface as a chat line instead of an error.
       await this.prepareConfirmation({
         sessionId: target.sessionId,
-        identity: { scope: ctx.scope, workspaceCwd, actorId },
+        identity: { scope: ctx.scope, workspaceCwd: targetCwd, actorId },
         chatId: ctx.chatId,
         ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
       });
@@ -811,12 +854,26 @@ export class SessionProjectionController {
         // succeeded. So the picker settles now and the confirmation card is
         // opened behind it, with a failure reported into the chat rather than
         // into a callback nobody is listening to any more.
-        void this.prepareConfirmation({
-          sessionId: picked,
-          identity: { scope: requestedScope, workspaceCwd, actorId: cardActor },
-          chatId: input.chatId,
-          ...(input.threadId ? { threadId: input.threadId } : {}),
-        }).catch(async (error: unknown) => {
+        void (async () => {
+          // The picker lists every workspace, so a pick may name a session the
+          // chat is not currently in; follow it before preparing (see
+          // adoptWorkspace) instead of failing the tap that the bot invited.
+          const pickedSession = (await this.deps.bridge.listSessions())
+            .find((item) => item.sessionId === picked);
+          if (!pickedSession) throw new Error(`session ${picked} was already deleted`);
+          if (pickedSession.trashed) {
+            throw new Error(`${pickedLabel} is in the recycle bin; restore it from the DSH Web session manager first`);
+          }
+          const targetCwd = pickedSession.cwd && pickedSession.cwd !== workspaceCwd
+            ? await this.adoptWorkspace({ scope: requestedScope, currentCwd: workspaceCwd, targetCwd: pickedSession.cwd })
+            : workspaceCwd;
+          await this.prepareConfirmation({
+            sessionId: picked,
+            identity: { scope: requestedScope, workspaceCwd: targetCwd, actorId: cardActor },
+            chatId: input.chatId,
+            ...(input.threadId ? { threadId: input.threadId } : {}),
+          });
+        })().catch(async (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           try {
             await this.deps.channel.sendMarkdown(
@@ -927,6 +984,40 @@ export class SessionProjectionController {
     return result.binding;
   }
 
+
+  /**
+   * Move this chat into the workspace a target session lives in.
+   *
+   * Both `/use` and the picker card offer sessions from every workspace, while
+   * binding is stored per `(scope, workspaceCwd)`. Nothing requires the two to
+   * match, so a target elsewhere is reachable — it just needs the chat's
+   * workspace to follow it first, which is exactly what `/cd` does. Doing it
+   * silently (rather than asking for a second command) keeps a tap on a listed
+   * session working, and the confirmation card still shows the resulting
+   * workspace before anything is committed.
+   *
+   * @returns the workspace the binding must be created under.
+   */
+  private async adoptWorkspace(input: {
+    scope: string;
+    currentCwd: string;
+    targetCwd: string;
+  }): Promise<string> {
+    if (!input.targetCwd || input.targetCwd === input.currentCwd) return input.currentCwd;
+    if (!this.deps.workspaces) {
+      throw new Error(
+        `该会话属于工作空间 ${input.targetCwd}，当前适配器不支持自动切换；请先发 /cd ${input.targetCwd} 再重试。\n`
+        + `This session belongs to workspace ${input.targetCwd} and this adapter cannot switch automatically; send /cd ${input.targetCwd} first.`,
+      );
+    }
+    // Same contract as `/cd`: leaving a workspace stops what is still running in
+    // it, so a turn cannot keep writing into a workspace the chat has left.
+    if (this.deps.activeRuns) {
+      await this.deps.activeRuns.interruptWorkspace(input.scope, input.currentCwd);
+    }
+    this.deps.workspaces.setCwd(input.scope, input.targetCwd);
+    return input.targetCwd;
+  }
 
   private async prepareConfirmation(input: {
     sessionId: string;

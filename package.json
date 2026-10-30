@@ -1,6 +1,6 @@
 {
   "name": "dsh-lark-bot",
-  "version": "0.19.17",
+  "version": "0.19.18-local.rc2.4",
   "description": "DSH飞书Session控制：把 DeepSeek Harness (dsh) 接入飞书/Lark，统一远程 session 控制、稳定别名、回收站、永久清理、Web 管理和半/完整衔接。| DSH Feishu Session Control: a unified Feishu/Lark bridge for remote session control, stable aliases, recycle-bin lifecycle, Web management, and half/full connection modes.",
   "author": "见川",
   "type": "module",
@@ -57,6 +57,10 @@
     "./session-manager": {
       "types": "./dist/session-manager.d.ts",
       "import": "./dist/session-manager.js"
+    },
+    "./plugin-manager": {
+      "types": "./dist/plugin-manager.d.ts",
+      "import": "./dist/plugin-manager.js"
     }
   },
   "files": [
@@ -77,7 +81,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-settings-plugins",
         "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-renderer"
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-slots"
       ]
     },
     "bundle": {
@@ -114,7 +119,11 @@
     ],
     "compatibility": {
       "dshVersions": [
-        "0.1.2-rc.1"
+        "0.2.0-rc.2",
+        "0.1.5-rc.3",
+        "0.1.2-rc.1",
+        "0.2.1-rc.2",
+        "0.2.1-rc.3"
       ]
     },
     "capability": {
@@ -183,13 +192,6 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-attachment": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-sdk-client": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-sdk-protocol": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-settings": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-skill": "0.1.2-rc.1",
     "@deepseek-ai/schemastery": "^3.18.2",
     "@larksuite/channel": "^0.4.1",
     "commander": "^12.1.0",
@@ -199,16 +201,22 @@
     "yaml": "^2.9.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1"
+    "@deepseek-ai/cordis": "^4.0.4 || ^4.0.5",
+    "@deepseek-ai/dsh-attachment": "0.1.2-rc.1 || 0.1.5-rc.3 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3",
+    "@deepseek-ai/dsh-sdk-client": "0.1.2-rc.1 || 0.1.5-rc.3 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3",
+    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.2-rc.1 || 0.1.5-rc.3 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3",
+    "@deepseek-ai/dsh-sdk-protocol": "0.1.2-rc.1 || 0.1.5-rc.3 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3",
+    "@deepseek-ai/dsh-settings": "0.1.2-rc.1 || 0.1.5-rc.3 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3",
+    "@deepseek-ai/dsh-skill": "0.1.2-rc.1 || 0.1.5-rc.3 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3"
   },
   "optionalDependencies": {
     "sharp": "^0.35.3"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-client-ui-renderer": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-client-ui-settings": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-client-ui-settings-plugins": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.3",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.10.0",
     "@types/qrcode": "^1.5.6",

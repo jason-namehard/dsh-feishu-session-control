@@ -24,6 +24,9 @@
  * `create -> followup -> dispose` round trip on a throwaway session.
  */
 
+import { sessionHeaderList } from '../../session/session-metadata.js';
+import { getSessionCore, type SessionCore } from '../../session-core/index.js';
+
 /** dsh's branded session identity; a plain string on the wire. */
 export type HostSessionId = string;
 
@@ -97,15 +100,22 @@ export function isSubagentSessionHeader(header: HostSessionHeader): boolean {
     (header.delegationDepth ?? 0) > 0;
 }
 
-/** One page of a session log, as `sessionPersistence.readFrom()` returns it. */
+/** One page of a session log returned by a persistence handle. */
 export interface HostSessionLog {
   readonly meta?: { readonly cwd?: string; readonly createdAt?: number };
   readonly events?: readonly HostSessionEvent[];
 }
 
 interface HostSessionPersistence {
-  list(): Promise<readonly HostSessionHeader[]>;
-  readFrom(id: HostSessionId, fromSeq: number): Promise<HostSessionLog>;
+  list(): Promise<readonly unknown[]>;
+  open?(id: HostSessionId, access: 'read' | 'write'): Promise<HostSessionHandle>;
+  readFrom?(id: HostSessionId, fromSeq: number): Promise<HostSessionLog>;
+}
+
+interface HostSessionHandle {
+  readonly header?: HostSessionLog['meta'];
+  read(offset?: number): Promise<HostSessionLog>;
+  close(): Promise<void>;
 }
 
 interface HostSessionQuery {
@@ -163,20 +173,105 @@ interface HostAgentRegistry {
 /** The cordis context shape this facade reads, kept structural on purpose. */
 export interface HostContextLike {
   get?(name: string): unknown;
+  root?: HostContextLike;
   on?(event: string, listener: (...args: unknown[]) => void): () => void;
+  /**
+   * cordis' dependency gate. Present from cordis 4 onward; used to WAIT for a
+   * service that dsh provides asynchronously (see {@link service}).
+   *
+   * The return type is `unknown` on purpose: cordis hands back a `Fiber` that
+   * also implements `PromiseLike`, and this facade only ever ignores it.
+   */
+  inject?(names: string[], callback: (ctx: unknown) => unknown): unknown;
 }
 
 function isFn(value: unknown): value is (...args: never[]) => unknown {
   return typeof value === 'function';
 }
 
+/**
+ * How long the bridge waits for a host service that dsh provides asynchronously.
+ * dsh 0.1.5 publishes `sessionPersistence` a few hundred ms after the plugin
+ * tree is ready; 15s is far above the observed delay while still bounded.
+ */
+const SERVICE_WAIT_MS = 15_000;
+
+/**
+ * Read a service without waiting. Synchronous on purpose: callers such as
+ * {@link hostServicesAvailable} inspect the result inline.
+ *
+ * @param ctx - the host context the bridge was mounted on.
+ * @param name - the service name.
+ * @returns the service value, or `undefined` when it is not provided (yet).
+ */
 function service(ctx: HostContextLike, name: string): unknown {
-  if (!isFn(ctx.get)) return undefined;
+  const contexts: HostContextLike[] = [ctx];
   try {
-    return (ctx.get as (n: string) => unknown)(name);
+    if (ctx.root && ctx.root !== ctx) contexts.push(ctx.root);
   } catch {
-    // A context without the service throws rather than returning undefined.
-    return undefined;
+  }
+  for (const candidate of contexts) {
+    try {
+      const value = (candidate as unknown as Record<string, unknown>)[name];
+      if (value !== undefined) return value;
+    } catch {
+    }
+    if (isFn(candidate.get)) {
+      try {
+        const value = (candidate.get as (n: string) => unknown)(name);
+        if (value !== undefined) return value;
+      } catch {
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Read a service, waiting briefly for dsh to publish it.
+ *
+ * dsh 0.1.5 provides some services (notably `sessionPersistence`) a few hundred
+ * milliseconds AFTER the plugin tree reports ready. The bridge starts its
+ * startup catch-up immediately, so a single synchronous read raced the
+ * provider and turned a "not yet" into a hard failure. Here the read parks on
+ * cordis' own dependency gate (`ctx.inject`) until the service appears.
+ *
+ * @param ctx - the host context the bridge was mounted on.
+ * @param name - the service name.
+ * @param waitMs - upper bound in milliseconds; the read is immediate when the
+ *   service is already there, and falls back to the plain read otherwise.
+ * @returns the service value, or `undefined` when it never appeared in time.
+ */
+/**
+ * Read a service, waiting until dsh publishes it.
+ *
+ * dsh 0.1.5 provides some services (notably `sessionPersistence`) a few hundred
+ * milliseconds AFTER the plugin tree reports ready. The bridge starts its
+ * startup catch-up immediately, so a single synchronous read raced the provider
+ * and turned a "not yet" into a hard failure — which surfaced as the
+ * `dsh session persistence is unavailable` loop every reconnect (5s).
+ *
+ * Deliberately implemented as a plain poll of `ctx.get(name)`: it must not
+ * depend on any cordis-specific helper (an earlier attempt used `ctx.inject`
+ * and never actually waited in the live process), and the context handed to the
+ * bridge may be a plain structural object rather than a cordis instance.
+ *
+ * @param ctx - the host context the bridge was mounted on.
+ * @param name - the service name.
+ * @param waitMs - upper bound in milliseconds. Returns immediately when the
+ *   service is already published.
+ * @returns the service value, or `undefined` when it never appeared in time.
+ */
+async function serviceOrWait(ctx: HostContextLike, name: string, waitMs: number): Promise<unknown> {
+  const deadline = Date.now() + Math.max(0, waitMs);
+  for (;;) {
+    const value = service(ctx, name);
+    if (value !== undefined) return value;
+    if (Date.now() >= deadline) return undefined;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 100);
+      timer.unref?.();
+    });
   }
 }
 
@@ -271,6 +366,15 @@ export class HostServices {
     factories: (() => Promise<HostFactories>) | undefined = undefined,
   ) {
     this.factories = factories ?? loadHostFactories;
+  }
+
+  /** The in-process session manager, when the GUI row has mounted it. */
+  sessionCore(): SessionCore | undefined {
+    const provided = service(this.ctx, 'dshSessionCore');
+    if (provided && typeof (provided as SessionCore).listActive === 'function') {
+      return provided as SessionCore;
+    }
+    return getSessionCore();
   }
 
   private registry(): HostAgentRegistry {
@@ -410,10 +514,10 @@ export class HostServices {
    * @returns the headers, or an empty list when persistence is unavailable.
    */
   async sessionHeaders(): Promise<readonly HostSessionHeader[]> {
-    const persistence = service(this.ctx, 'sessionPersistence') as HostSessionPersistence | undefined;
+    const persistence = await serviceOrWait(this.ctx, 'sessionPersistence', SERVICE_WAIT_MS) as HostSessionPersistence | undefined;
     if (!persistence || !isFn(persistence.list)) return [];
     try {
-      return await persistence.list();
+      return sessionHeaderList(await persistence.list()) as HostSessionHeader[];
     } catch {
       return [];
     }
@@ -425,11 +529,18 @@ export class HostServices {
    * @param fromSeq - first event seq to include.
    */
   async readSessionLog(sessionId: HostSessionId, fromSeq = 0): Promise<HostSessionLog> {
-    const persistence = service(this.ctx, 'sessionPersistence') as HostSessionPersistence | undefined;
-    if (!persistence || !isFn(persistence.readFrom)) {
+    const persistence = await serviceOrWait(this.ctx, 'sessionPersistence', SERVICE_WAIT_MS) as HostSessionPersistence | undefined;
+    if (!persistence) {
       throw new Error('dsh session persistence is unavailable');
     }
-    return persistence.readFrom(sessionId, fromSeq);
+    if (isFn(persistence.readFrom)) return persistence.readFrom(sessionId, fromSeq);
+    if (!isFn(persistence.open)) throw new Error('dsh session persistence is unavailable');
+    const handle = await persistence.open(sessionId, 'read');
+    try {
+      return await handle.read(fromSeq);
+    } finally {
+      await handle.close();
+    }
   }
 
   /**
@@ -437,7 +548,7 @@ export class HostServices {
    * @param sessionId - the session to look up.
    */
   async sessionTitle(sessionId: HostSessionId): Promise<string | undefined> {
-    const query = service(this.ctx, 'sessionQuery') as HostSessionQuery | undefined;
+    const query = await serviceOrWait(this.ctx, 'sessionQuery', SERVICE_WAIT_MS) as HostSessionQuery | undefined;
     if (!query || !isFn(query.readTitleSnapshot)) return undefined;
     try {
       const snapshot = await query.readTitleSnapshot(sessionId);
@@ -465,7 +576,16 @@ export class HostServices {
     title: string,
     route: HostAgentOptions = {},
   ): Promise<string> {
-    const titles = service(this.ctx, 'sessionTitle') as HostSessionTitles | undefined;
+    const controller = service(this.ctx, 'sessionController') as {
+      rename?: (request: { sessionId: HostSessionId; title: string }) => Promise<{ title?: string }>;
+    } | undefined;
+    if (controller && isFn(controller.rename)) {
+      const result = await controller.rename({ sessionId, title });
+      return typeof result?.title === 'string' && result.title.trim() !== ''
+        ? result.title.trim()
+        : title;
+    }
+    const titles = await serviceOrWait(this.ctx, 'sessionTitle', SERVICE_WAIT_MS) as HostSessionTitles | undefined;
     if (!titles || !isFn(titles.rename)) {
       throw new Error('this dsh deployment mounts no session-title service');
     }
@@ -516,6 +636,8 @@ export class HostServices {
    * @returns the selection, or empty when the host exposes none.
    */
   defaultRoute(): HostAgentOptions {
+    // Synchronous on purpose: dsh publishes `agentDefaultModel` with the tree,
+    // unlike `sessionPersistence`, so this needs no wait.
     const service_ = service(this.ctx, 'agentDefaultModel') as HostDefaultModel | undefined;
     if (!service_ || !isFn(service_.currentSelection)) return {};
     try {

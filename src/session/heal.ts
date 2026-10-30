@@ -24,12 +24,14 @@ export type SessionHealKind = 'corrupt' | 'broken';
 const BROKEN_ANCHORED =
   /session\s+["'`]?[A-Za-z0-9_-]+["'`]?\s+already has a persisted log(?: on disk)? that does not match this live session(?: \(id collision\))?|does not match this live session\s*\(id collision\)/i;
 
+const EXISTING_SESSION = /^session\s+[\x22\x27\x60][-A-Za-z0-9_]+[\x22\x27\x60]\s+already exists$/i;
+
 const CORRUPT_ANCHORED =
   /corrupt(?:ed)? session log|session log[^\n]{0,80}?\bseq(?:uence)? gap\b|\bseq(?:uence)? gap\b[^\n]{0,80}?session log/i;
 
 /** Classify a session error into a heal kind, or `undefined` when unrelated. */
 export function classifySessionError(message: string): SessionHealKind | undefined {
-  if (BROKEN_ANCHORED.test(message)) return 'broken';
+  if (BROKEN_ANCHORED.test(message) || EXISTING_SESSION.test(message)) return 'broken';
   if (CORRUPT_ANCHORED.test(message)) return 'corrupt';
   return undefined;
 }

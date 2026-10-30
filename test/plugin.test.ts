@@ -34,8 +34,14 @@ function makeCtx() {
         return () => {};
       },
     },
-    inject: vi.fn((_deps: unknown, consumer: (ctx: unknown) => void | Promise<void>) => {
-      settingsConsumer = consumer;
+    inject: vi.fn((deps: unknown, consumer: (ctx: unknown) => void | Promise<void>) => {
+      const names = Array.isArray(deps) ? deps : [];
+      if (names.includes('sessionPersistence')) {
+        void consumer(ctx);
+      }
+      if (names.includes('settings')) {
+        settingsConsumer = consumer;
+      }
     }),
   };
   return {

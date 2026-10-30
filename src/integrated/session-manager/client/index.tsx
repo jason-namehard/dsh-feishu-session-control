@@ -158,6 +158,23 @@ function pathName(p) {
   return parts[parts.length - 1] || p
 }
 
+function coldRow(item) {
+  const workspacePath = typeof item.workspacePath === 'string' ? item.workspacePath : null
+  return {
+    sessionId: String(item.sessionId),
+    title: typeof item.title === 'string' ? item.title : null,
+    createdAt: typeof item.createdAt === 'number' ? item.createdAt : null,
+    updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : typeof item.movedAt === 'number' ? item.movedAt : null,
+    workspacePath,
+    workspaceTitle: pathName(workspacePath),
+    workspaceGone: false,
+    hasWorkspace: !!workspacePath,
+    archived: true,
+    starred: false,
+    cold: true,
+  }
+}
+
 async function postJSON(path, body) {
   const res = await fetch(path, {
     method: 'POST',
@@ -262,13 +279,18 @@ function SessionPanel({ workspacesSvc }) {
     setError(null)
     Promise.all([
       postJSON('/archived-sessions/sessions', {}),
+      postJSON('/archived-sessions/list', {}),
       postJSON('/archived-sessions/workspaces', {}),
     ])
-      .then(([s, works]) => {
+      .then(([s, archived, works]) => {
         // Permanently-purged sessions must never re-appear here, even if DSH's
         // in-memory session index still lists them after the file was unlinked.
         const purged = dsmLoadPurged()
-        const visible = (s.items || []).filter((x) => !purged.has(String(x.sessionId)))
+        const active = (s.items || []).filter((x) => !purged.has(String(x.sessionId)))
+        const cold = (archived.items || [])
+          .filter((x) => !purged.has(String(x.sessionId)))
+          .map(coldRow)
+        const visible = [...active, ...cold]
         setSessions(visible)
         setWorkspaces(works.items || [])
         setSelected({})
@@ -407,6 +429,7 @@ function SessionPanel({ workspacesSvc }) {
         setBusy(null)
         const n = it.title || it.sessionId
         showToast(action === 'archive' ? `已归档「${n}」` : `已恢复「${n}」`)
+        if (action === 'archive' || action === 'restore') dsmLoadTrashIds()
         refresh()
       })
       .catch((e) => { setBusy(null); setError(String((e && e.message) || e)) })
@@ -451,6 +474,27 @@ function SessionPanel({ workspacesSvc }) {
     setTrashBusy(sid)
     postJSON('/archived-sessions/trash/restore', { sessionId: sid })
       .then(() => { setTrashBusy(null); showToast('已恢复会话'); loadTrash(); refresh() })
+      .catch((e) => { setTrashBusy(null); setError(String((e && e.message) || e)) })
+  }
+  const archiveTrash = (sid) => {
+    if (trashBusy) return
+    setTrashBusy(sid)
+    postJSON('/archived-sessions/trash/archive', { sessionId: sid })
+      .then(() => { setTrashBusy(null); showToast('已转入归档'); dsmLoadTrashIds(); loadTrash(); refresh() })
+      .catch((e) => { setTrashBusy(null); setError(String((e && e.message) || e)) })
+  }
+  const archiveAllTrash = () => {
+    if (trashBusy || !trash.length) return
+    setTrashBusy('__archive-all')
+    const all = trash.map((t) => t.sessionId)
+    postJSON('/archived-sessions/trash/archive-many', { sessionIds: all })
+      .then((r) => {
+        setTrashBusy(null)
+        showToast(`已归档 ${r.archived || all.length} 个会话`)
+        dsmLoadTrashIds()
+        loadTrash()
+        refresh()
+      })
       .catch((e) => { setTrashBusy(null); setError(String((e && e.message) || e)) })
   }
   const purgeTrash = (sid) => {
@@ -571,7 +615,6 @@ function SessionPanel({ workspacesSvc }) {
     const items = it.archived
       ? [
           ['restore', '恢复'],
-          ['move', openMove === it.sessionId ? '收起移动' : '移动'],
           ['details', openDetails === it.sessionId ? '收起详情' : '详情'],
           ['delete', '删除'],
         ]
@@ -667,12 +710,12 @@ function SessionPanel({ workspacesSvc }) {
                   {filter === 'archived' && (
                     <>
                       <button type="button" className="archv-btn" disabled={busy !== null} onClick={() => doBatch('restore-many')}>恢复所选</button>
-                      <button type="button" className="archv-btn archv-del" disabled={busy !== null} onClick={() => doBatch('delete-many')}>{confirmBatch ? '确认删除所选?' : '删除所选'}</button>
                     </>
                   )}
                   {filter !== 'archived' && (
                     <button type="button" className="archv-btn" disabled={busy !== null} onClick={() => doBatch('archive-many')}>归档所选</button>
                   )}
+                  <button type="button" className="archv-btn archv-del" disabled={busy !== null} onClick={() => doBatch('delete-many')}>{confirmBatch ? '确认移入回收站?' : '移入回收站'}</button>
                   <button type="button" className="archv-btn" onClick={clearSel}>取消选择</button>
                 </>
               )}
@@ -861,7 +904,7 @@ function SessionPanel({ workspacesSvc }) {
           <h3>回收站</h3>
           <span className="dsm-trash-count">{trash.length ? `（${trash.length} 个待清理）` : '（空）'}</span>
         </div>
-        <div className="sess-tools">
+          <div className="sess-tools">
           <div className="sess-field">
             <label htmlFor="dsm-retention">自动清理</label>
             <select id="dsm-retention" value={trashSettings.retentionDays || 0} disabled={trashBusy !== null} onChange={(e) => updateRetention(e.target.value)}>
@@ -869,7 +912,7 @@ function SessionPanel({ workspacesSvc }) {
             </select>
           </div>
           <div className="sess-field"><label>数据检查</label><button type="button" className="archv-btn" disabled={trashBusy !== null} onClick={verifyTrash}>{trashBusy === '__verify' ? '校验中…' : '校验日志完整性'}</button></div>
-          <div className="sess-field"><label>永久清理</label><button type="button" className="archv-btn archv-del" disabled={trashBusy !== null || !trash.length} onClick={() => setPurgeTarget('__all')}>清空回收站</button></div>
+            <div className="sess-field"><label>归档与永久清理</label><div className="dsm-trash-toolbar"><button type="button" className="archv-btn" disabled={trashBusy !== null || !trash.length} onClick={archiveAllTrash}>{trashBusy === '__archive-all' ? '归档中…' : '全部转归档'}</button><button type="button" className="archv-btn archv-del" disabled={trashBusy !== null || !trash.length} onClick={() => setPurgeTarget('__all')}>清空回收站</button></div></div>
         </div>
         {trashCheck && <div className={trashCheck.missing ? 'archv-err' : 'archv-empty'} role="status">校验完成：{trashCheck.healthy} 条正常，{trashCheck.missing} 条日志缺失。</div>}
         {trash.length === 0 ? (
@@ -879,9 +922,10 @@ function SessionPanel({ workspacesSvc }) {
             {trash.map((t) => (
               <div key={t.sessionId} className="dsm-trash-row">
                 <span className="dsm-trash-name" title={t.sessionId}>{t.title || t.sessionId}</span>
-                <span className="dsm-trash-date">{fmtDate(t.deletedAt)}</span>
+                  <span className="dsm-trash-date">{fmtDate(t.movedAt || t.deletedAt)}</span>
                 <span className="dsm-trash-actions">
                   <button type="button" className="archv-btn" disabled={trashBusy !== null} onClick={() => restoreTrash(t.sessionId)}>恢复</button>
+                  <button type="button" className="archv-btn" disabled={trashBusy !== null} onClick={() => archiveTrash(t.sessionId)}>转归档</button>
                   <button type="button" className="archv-btn archv-del" disabled={trashBusy !== null} onClick={() => setPurgeTarget(t.sessionId)}>彻底删除</button>
                 </span>
               </div>
@@ -959,7 +1003,7 @@ const SIDEBAR_AUG_CSS = `
 .dsm-trash-row{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-fill-elevated)}
 .dsm-trash-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--dsw-alias-label-primary)}
 .dsm-trash-date{font-size:11px;color:var(--dsw-alias-label-tertiary);flex:none;white-space:nowrap}
-.dsm-trash-actions{display:flex;gap:6px;flex:none}.dsm-trash-actions .archv-btn{min-width:72px}
+.dsm-trash-toolbar{display:flex;gap:6px;flex-wrap:wrap}.dsm-trash-actions{display:flex;gap:6px;flex:none}.dsm-trash-actions .archv-btn{min-width:72px}
 .dsm-trash-empty{font-size:12px;color:var(--dsw-alias-label-tertiary);padding:6px 2px}
 `
 
@@ -986,6 +1030,7 @@ function dsmToggleManual(id) {
 // up under DSH's "未分组" group. Loaded from the backend on a throttle and
 // updated optimistically when our own ⋯-menu deletes a session.
 let dsmTrashIds = null
+let dsmArchivedIds = null
 let dsmServerPurgedIds = new Set()
 let dsmAuthoritativeTitles = new Map()
 let dsmTrashTick = 0
@@ -993,6 +1038,7 @@ async function dsmLoadTrashIds() {
   try {
     const r = await postJSON('/archived-sessions/sidebar-state', {})
     dsmTrashIds = new Set(((r && r.trashedSessionIds) || []).map(String))
+    dsmArchivedIds = new Set(((r && r.archivedSessionIds) || []).map(String))
     dsmServerPurgedIds = new Set(((r && r.purgedSessionIds) || []).map(String))
     dsmAuthoritativeTitles = new Map(Object.entries((r && r.titles) || {}).map(([id, title]) => [String(id), String(title)]))
     if (dsmRepaintDots) dsmRepaintDots()
@@ -1327,7 +1373,7 @@ function installSidebarStatusDots() {
       // hard-purged sessions — they're gone for good and must never resurface
       // (otherwise DSH re-renders the orphan under a "未分组" group).
       const purged = dsmLoadPurged()
-      if ((dsmTrashIds && dsmTrashIds.has(id)) || purged.has(id)) {
+      if ((dsmTrashIds && dsmTrashIds.has(id)) || (dsmArchivedIds && dsmArchivedIds.has(id)) || purged.has(id)) {
         if (row.style.display !== 'none') row.style.display = 'none'
         const d = row.querySelector('[' + DOT + ']'); if (d) d.remove()
         return

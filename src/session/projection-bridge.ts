@@ -49,18 +49,34 @@ interface StreamBuffer {
   lastSentAt: number;
 }
 
+type SessionFailureKind = 'missing' | 'corrupt';
+
+interface QuarantinedSession {
+  kind: SessionFailureKind;
+  message: string;
+}
+
 const KNOWN_NON_PROJECTED_EVENTS = new Set([
-  // Pinned DSH rc.8 session vocabulary minus the four projected message
-  // events. A newer required type still fails closed unless marked ignorable.
+  // DSH's session vocabulary minus the four projected message events, kept in
+  // step with `@deepseek-ai/dsh-session`'s KNOWN_SESSION_EVENT_TYPES. A newer
+  // required type still fails closed unless marked ignorable.
+  //
+  // Verified against 0.1.2-rc.1: the three entries below were missing and cost
+  // every bound session its projection — `model/selection` is appended on each
+  // run when the model is chosen, so the stream died at connect with
+  // "unknown required DSH session event: model/selection" and never recovered.
   'agent-preset/selected', 'agent/inbox/spliced',
   'approval/asked', 'approval/decided', 'approval/policy',
   'command/done', 'command/run',
   'compaction/end', 'compaction/prune', 'compaction/start', 'compaction/summary',
   'feedback/record', 'goal/change', 'hook/invoked', 'hook/result',
-  'llm/retry', 'llm/retry-started', 'permission/preset', 'plan/mode',
+  'llm/retry', 'llm/retry-started', 'model/selection',
+  'permission/preset', 'plan/mode',
   'request/context', 'request/header', 'sandbox/mode', 'schedule/change',
+  'session-log-deepseek/delivery-accepted',
   'session/end-seed', 'session/title', 'session/title-llm-request',
-  'step/end', 'step/start', 'subagent/descriptor',
+  'system/message',
+  'step/end', 'step/start', 'subagent/descriptor', 'subagent/model-selection-policy',
   'team/member', 'team/message/delivered', 'team/message/queued', 'team/task',
   'todo/write', 'tool-workflow/agent-end', 'tool-workflow/agent-start',
   'tool-workflow/run-end', 'tool-workflow/run-start',
@@ -74,6 +90,7 @@ export class SessionProjectionBridge {
   private readonly streams = new Map<string, StreamBuffer>();
   private readonly activeTurns = new Map<string, string>();
   private readonly feishuTurns = new Set<string>();
+  private readonly quarantinedSessions = new Map<string, QuarantinedSession>();
   private stream: SessionEventStream | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private closed = true;
@@ -92,7 +109,7 @@ export class SessionProjectionBridge {
       try {
         await this.serial(binding.sessionId, () => this.catchUp(binding));
       } catch (error) {
-        log.fail('session-projection', error, { step: 'startup-catch-up', sessionId: binding.sessionId });
+        await this.handleCatchUpFailure(binding.sessionId, error, 'startup-catch-up');
       }
     }
     await this.connect();
@@ -156,8 +173,22 @@ export class SessionProjectionBridge {
     workspaceCwd: string,
     throughSeq?: number,
   ): Promise<PreparedSessionBinding> {
+    const quarantined = this.quarantinedSessions.get(sessionId);
+    if (quarantined) {
+      throw new Error(
+        `session history is unavailable (${quarantined.kind}): ${quarantined.message}`,
+      );
+    }
     const session = (await this.eligibleSessions(workspaceCwd)).find((item) => item.sessionId === sessionId);
-    if (!session) throw new Error('session is not selectable in the current workspace');
+    if (!session) {
+      // Name the fix, not just the failure: a session in another workspace is
+      // reachable via /use (which follows it) or /cd, and the caller may have
+      // passed the pre-switch cwd.
+      throw new Error(
+        `session is not selectable in the current workspace (${workspaceCwd}); `
+        + 'send /use <alias> to follow the session, or /cd <path> first',
+      );
+    }
     const gathered: DshSessionEvent[] = [];
     let beforeSeq = throughSeq === undefined ? undefined : throughSeq + 1;
     let hasMore = false;
@@ -279,6 +310,7 @@ export class SessionProjectionBridge {
     try {
       const stream = await this.deps.source.openEvents((decoded) => {
         if (!this.deps.store.ownerOf(decoded.sessionId)) return;
+        if (this.quarantinedSessions.has(decoded.sessionId)) return;
         void this.serial(decoded.sessionId, async () => {
           const binding = this.deps.store.ownerOf(decoded.sessionId);
           if (!binding) return;
@@ -290,7 +322,9 @@ export class SessionProjectionBridge {
               decoded.event.seq > current.lastProjectedSeq) {
             await this.project(current, decoded.event);
           }
-        }).catch((error) => {
+        }).catch(async (error) => {
+          const action = await this.handleCatchUpFailure(decoded.sessionId, error, 'live-event');
+          if (action !== 'retry') return;
           log.fail('session-projection', error, {
             step: 'live-event', sessionId: decoded.sessionId, seq: decoded.event.seq,
           });
@@ -311,15 +345,58 @@ export class SessionProjectionBridge {
         if (this.stream === stream) this.stream = undefined;
         this.scheduleReconnect();
       });
+      let retryRequired = false;
       for (const binding of this.deps.store.list()) {
-        await this.serial(binding.sessionId, () => this.catchUp(binding));
+        if (this.quarantinedSessions.has(binding.sessionId)) continue;
+        try {
+          await this.serial(binding.sessionId, () => this.catchUp(binding));
+        } catch (error) {
+          const action = await this.handleCatchUpFailure(binding.sessionId, error, 'connect-catch-up');
+          if (action === 'retry') retryRequired = true;
+        }
       }
+      if (retryRequired) throw new Error('one or more session histories need a reconnect retry');
       log.info('session-projection', 'mux-connected', { bindings: this.deps.store.list().length });
     } catch (error) {
       log.fail('session-projection', error, { step: 'connect' });
       try { this.stream?.close(); } catch { /* best effort */ }
       this.stream = undefined;
       this.scheduleReconnect();
+    }
+  }
+
+  private async handleCatchUpFailure(
+    sessionId: string,
+    error: unknown,
+    step: string,
+  ): Promise<'quarantine' | 'retry'> {
+    const kind = classifySessionFailure(error);
+    if (kind === undefined) return 'retry';
+    const message = error instanceof Error ? error.message : String(error);
+    const previous = this.quarantinedSessions.get(sessionId);
+    this.quarantinedSessions.set(sessionId, { kind, message });
+    if (previous?.kind !== kind || previous.message !== message) {
+      log.warn('session-projection', 'session-quarantined', { step, sessionId, kind, message });
+    }
+    this.clearVolatileSessionState(sessionId);
+    if (kind === 'missing') {
+      try {
+        await this.deps.store.removeSession(sessionId);
+      } catch (removeError) {
+        log.fail('session-projection', removeError, {
+          step: 'remove-stale-binding', sessionId,
+        });
+      }
+    }
+    return 'quarantine';
+  }
+
+  private clearVolatileSessionState(sessionId: string): void {
+    this.streams.delete(sessionId);
+    this.activeTurns.delete(sessionId);
+    const prefix = `${sessionId}:`;
+    for (const key of this.feishuTurns) {
+      if (key.startsWith(prefix)) this.feishuTurns.delete(key);
     }
   }
 
@@ -726,4 +803,13 @@ function wait(ms: number): Promise<void> {
   // card update is eligible, otherwise an awaited projection could vanish on
   // an otherwise idle shutdown boundary.
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function classifySessionFailure(error: unknown): SessionFailureKind | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/not found|does not exist|missing/i.test(message)) return 'missing';
+  if (/refuses this format|SessionFormatError|corrupt|unexpected member/i.test(message)) {
+    return 'corrupt';
+  }
+  return undefined;
 }

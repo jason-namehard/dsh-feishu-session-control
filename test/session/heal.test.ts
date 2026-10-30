@@ -15,6 +15,7 @@ afterEach(async () => {
 
 describe('classifySessionError', () => {
   it('classifies the canonical id-collision resume error as broken', () => {
+    expect(classifySessionError('session \x22session-1\x22 already exists')).toBe('broken');
     expect(
       classifySessionError(
         'session "session-1" already has a persisted log on disk that does not match this live session (id collision)',
@@ -40,6 +41,7 @@ describe('classifySessionError', () => {
       classifySessionError('my notes mention a "seq gap" in the roadmap'),
     ).toBeUndefined();
     expect(classifySessionError('does not match this live session')).toBeUndefined();
+    expect(classifySessionError('the plan session \x22session-1\x22 already exists')).toBeUndefined();
     expect(classifySessionError('')).toBeUndefined();
   });
 });
