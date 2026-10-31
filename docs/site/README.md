@@ -2,6 +2,8 @@
 
 基于 **VitePress** 的项目落地页 + 使用文档站，部署到 Cloudflare Pages；由 `.github/workflows/cf-pages.yml` 在 `main` 分支的 `docs/**` 变更时自动构建并部署。
 
+部署使用 GitHub Actions 的 `CLOUDFLARE_API_TOKEN` secret，令牌需要目标账号的 `Cloudflare Pages: Edit` 权限。账号 ID 和 Pages 项目名配置在部署工作流中。
+
 > 参考 Kimi Code / MiMoCode 官方 docs 站的「Vite 系文档框架 + 侧边栏分目录 + 明暗主题 + 响应式移动端」风格。
 
 ## 技术栈
