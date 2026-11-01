@@ -16,6 +16,10 @@ export function readDshCompatibility() {
   const lockfile = readFileSync(join(ROOT, 'pnpm-lock.yaml'), 'utf8');
   const lockPackages = lockfile.split('\nsnapshots:\n', 1)[0];
   const get = (key) => source.match(new RegExp(`\\b${key}:\\s*'([^']+)'`))?.[1];
+  // The DSH core packages are peer dependencies since the in-process rebuild:
+  // the host provides them, and the plugin declares every version it supports.
+  const packageSdkClient = packageJson.peerDependencies?.['@deepseek-ai/dsh-sdk-client']
+    ?? packageJson.dependencies?.['@deepseek-ai/dsh-sdk-client'];
   return {
     harness: get('harness'),
     sdkClient: get('sdkClient'),
@@ -23,13 +27,14 @@ export function readDshCompatibility() {
     acp: get('acp'),
     node: get('node'),
     verifiedAt: get('verifiedAt'),
-    packageSdkClient: packageJson.dependencies?.['@deepseek-ai/dsh-sdk-client'],
+    packageSdkClient,
     packageDshTools: packageJson.dependencies?.['@deepseek-ai/dsh-tools'],
     workshopDshVersions: packageJson.dshWorkshop?.compatibility?.dshVersions,
-    staleCoreLockEntries: [...new Set(
+    // Base versions (pnpm peer/hash suffixes stripped) of every DSH core
+    // package actually pinned in the lockfile.
+    coreLockVersions: [...new Set(
       [...lockPackages.matchAll(/^  '(@deepseek-ai\/dsh-[a-z0-9-]+)@([^']+)':$/gm)]
-        .filter(([, , version]) => version !== get('harness'))
-        .map(([, name, version]) => `${name}@${version}`),
+        .map(([, , version]) => version.split('(', 1)[0]),
     )],
   };
 }

@@ -270,9 +270,16 @@ export async function fetchUpstreamData(upstream, fetchImpl = fetch) {
 
 function assertNoCompatibilityDrift() {
   const compat = readDshCompatibility();
-  let mismatch = compat.sdkClient !== compat.packageSdkClient;
-  if (mismatch) {
-    console.error(`drift: dsh-compat.ts sdkClient=${compat.sdkClient} but package.json pins ${compat.packageSdkClient}`);
+  let mismatch = false;
+  // dsh-compat.ts pins one exact sdkClient; package.json declares it inside
+  // the peer range of supported DSH versions, so check range membership.
+  const peerAlternatives = String(compat.packageSdkClient ?? '')
+    .split('||')
+    .map((version) => version.trim())
+    .filter(Boolean);
+  if (!peerAlternatives.includes(compat.sdkClient)) {
+    console.error(`drift: dsh-compat.ts sdkClient=${compat.sdkClient} is not covered by the package.json peer range ${compat.packageSdkClient ?? '(missing)'}`);
+    mismatch = true;
   }
   if (compat.packageDshTools !== undefined) {
     console.error('drift: package.json must not directly depend on @deepseek-ai/dsh-tools');
@@ -282,8 +289,10 @@ function assertNoCompatibilityDrift() {
     console.error(`drift: dshWorkshop.compatibility.dshVersions does not include ${compat.harness}`);
     mismatch = true;
   }
-  if (compat.staleCoreLockEntries.length > 0) {
-    console.error(`drift: stale core lock entries: ${compat.staleCoreLockEntries.join(', ')}`);
+  const unsupportedCore = [...compat.coreLockVersions]
+    .filter((version) => !compat.workshopDshVersions?.includes(version));
+  if (unsupportedCore.length > 0) {
+    console.error(`drift: pnpm-lock pins dsh core versions outside dshWorkshop.compatibility.dshVersions: ${unsupportedCore.join(', ')}`);
     mismatch = true;
   }
   if (mismatch) throw new Error('local dsh compatibility matrix drift detected');
